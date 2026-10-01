@@ -77,7 +77,7 @@ python -m pip install -r requirements.txt
 python server.py --open                                         # 開發模式
 powershell -ExecutionPolicy Bypass -File packaging\build.ps1    # 建置 dist\VideoLibraryViewer.exe
 ```
-需要 Python 3.10 以上。`packaging/github-actions-build.yml` 是 GitHub Actions 自動建置與冒煙測試的設定，複製到 `.github/workflows/` 即可啟用。
+需要 Python 3.10 以上。每次推送到 `main`（或開 Pull Request）時，GitHub Actions 會自動建置 exe 並測試能否啟動。產出的 exe 可在 [Actions](../../actions) 該次執行頁面最下方的 Artifacts 下載（設定檔：`.github/workflows/build.yml`）。
 
 ## 專案結構
 ```
