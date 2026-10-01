@@ -35,7 +35,7 @@
 | 影片檔案存取 | 顯示清冊中有幾個影片讀得到，讀不到時可到「路徑對應」調整 |
 | 桌面捷徑 | 可一鍵建立 |
 
-指令列：`VideoLibraryViewer.exe --check`（只做檢查）、`--install-ffmpeg`（只安裝 ffmpeg）、`--port 8765`、`--host 0.0.0.0`、`--import 清冊.xlsx`、`--no-browser`
+指令列：`VideoLibraryViewer.exe --check`（只做檢查）、`--install-ffmpeg`（只安裝 ffmpeg）、`--port 8765`、`--host 0.0.0.0`、`--import 清冊.xlsx 或 Organizer 分析過的資料夾`（程式已在執行時，會交給執行中的程式匯入）、`--no-browser`
 
 ### ffmpeg 自動安裝的運作方式
 - 依序從 [gyan.dev 官方 GitHub](https://github.com/GyanD/codexffmpeg/releases)（約 110 MB）、[GitHub BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds) 和 [gyan.dev 網站](https://www.gyan.dev/ffmpeg/builds/) 下載。每個檔案都會以官方提供的 **SHA-256 校驗碼**驗證，不符就捨棄；某個來源太慢（30 秒後低於 200 KB/s）時，會自動改用下一個
@@ -73,6 +73,7 @@
 - 檔名、完整路徑、媒體類型、處理時間、Markdown／備份路徑、錯誤原因由 Organizer 產生，面板編輯這些欄位時會顯示提醒
 - 空白，或選 Organizer 自己的狀態（待處理、待確認、完成、失敗…）時，會依分析結果顯示，與 Organizer 重建 Excel 時的規則相同
 - 1.2.0 以前匯入的 Organizer 清冊，啟動後會自動建立連結
+- Organizer 0.3.0 Beta 5 起，安裝 Organizer 時會一併安裝影像圖書館；在 Organizer 按「開啟影像圖書館」就會開啟並連結目前的資料夾。要給沒有裝 Organizer 的同事使用，仍可單獨下載本程式
 - 請搭配 Organizer 0.3.0 Beta 4 以上版本；舊版 Organizer（0.3.0 Beta 2 以前）仍會覆蓋面板的修改
 
 ## 路徑對應

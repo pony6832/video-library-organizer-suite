@@ -33,7 +33,7 @@ FROZEN = getattr(sys, "frozen", False)
 # 打包成 exe 時：資料、設定放在 exe 旁邊；網頁檔案在 exe 內部
 BASE = Path(sys.executable).resolve().parent if FROZEN else Path(__file__).resolve().parent
 STATIC = Path(getattr(sys, "_MEIPASS", BASE)) / "static"
-__version__ = "1.3.0"
+__version__ = "1.4.0"
 APP_ID = "video-library-viewer"
 
 
@@ -1520,6 +1520,22 @@ def is_our_server(port):
         return False
 
 
+def import_via_running(port, path):
+    """程式已在執行時，請它匯入清冊或 Organizer 資料夾（例如從 Organizer 按「開啟影像圖書館」）"""
+    import urllib.error
+    import urllib.request
+    req = urllib.request.Request(f"http://127.0.0.1:{port}/api/import_path", method="POST",
+                                 data=json.dumps({"path": os.path.abspath(path)}).encode(),
+                                 headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=120) as r:
+            print("匯入", path, json.loads(r.read()).get("rows"), "筆")
+    except urllib.error.HTTPError as e:
+        print("無法匯入", path, "：", json.loads(e.read() or b"{}").get("detail", e.reason))
+    except OSError as e:
+        print("無法匯入", path, "：", e)
+
+
 def pause_exit():
     if FROZEN:
         try:
@@ -1585,7 +1601,8 @@ def main():
     ap = argparse.ArgumentParser(description="影像圖書館 後端")
     ap.add_argument("--host", default="127.0.0.1", help="要讓區網其他電腦使用請設為 0.0.0.0")
     ap.add_argument("--port", type=int, default=8765)
-    ap.add_argument("--import", dest="imports", nargs="*", default=[], help="啟動時匯入的 Excel 清冊")
+    ap.add_argument("--import", dest="imports", nargs="*", default=[],
+                    help="啟動時匯入的 Excel 清冊，或 Video Library Organizer 分析過的資料夾")
     ap.add_argument("--open", action="store_true", help="啟動後自動開啟瀏覽器")
     ap.add_argument("--no-browser", action="store_true", help="不要自動開啟瀏覽器（exe 預設會開啟）")
     ap.add_argument("--install-ffmpeg", action="store_true", help="下載安裝 ffmpeg 後結束")
@@ -1604,8 +1621,10 @@ def main():
         a.open = True
     import webbrowser
     if not envcheck.port_free(a.port):
-        if is_our_server(a.port):  # 已在執行中：直接開啟瀏覽器即可
+        if is_our_server(a.port):  # 已在執行中：交給執行中的程式匯入，再開啟瀏覽器
             print("影像圖書館已在執行中：", f"http://127.0.0.1:{a.port}/")
+            for f in a.imports:
+                import_via_running(a.port, f)
             if not a.no_browser:
                 webbrowser.open(f"http://127.0.0.1:{a.port}/")
             return
@@ -1620,8 +1639,11 @@ def main():
     url = f"http://127.0.0.1:{a.port}/"
     init_db()
     for f in a.imports:
-        p = os.path.abspath(f)
-        print("匯入", p, import_workbook(p, os.path.basename(p), p))
+        try:
+            p = resolve_import_path(os.path.abspath(f))
+            print("匯入", p, import_workbook(p, os.path.basename(p), p))
+        except HTTPException as e:
+            print("無法匯入", f, "：", e.detail)
     start_probe_all()
     threading.Thread(target=sync_worker, daemon=True).start()
     if a.open:
