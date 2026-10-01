@@ -5,7 +5,7 @@ from PyInstaller.utils.hooks import collect_submodules
 
 root = os.path.dirname(SPECPATH)
 pk = os.path.join(root, "packaging")
-hidden = collect_submodules("uvicorn") + ["excel_sync", "pythoncom", "pywintypes", "win32com.client"]
+hidden = collect_submodules("uvicorn") + ["excel_sync", "organizer_link", "pythoncom", "pywintypes", "win32com.client"]
 
 a = Analysis(
     [os.path.join(root, "server.py")],

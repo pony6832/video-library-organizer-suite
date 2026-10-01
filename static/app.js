@@ -540,7 +540,9 @@ async function importPath() {
   try {
     const r = await api('/api/import_path', { method: 'POST', json: { path: p } });
     $('#importDlg').close();
-    toast(`匯入完成：${r.rows} 筆（新增 ${r.inserted}、更新 ${r.updated}）。修改會即時寫回此 Excel`, 5000);
+    toast(r.organizer
+      ? `已連結 Organizer 成果：${r.rows} 筆。分析出新結果時會自動更新，修改會即時寫回 Excel`
+      : `匯入完成：${r.rows} 筆（新增 ${r.inserted}、更新 ${r.updated}）。修改會即時寫回此 Excel`, 5000);
     await load(); pollSync(); setTimeout(load, 4000);
   } catch (err) { toast('匯入失敗：' + err.message, 5000); }
 }
@@ -1142,11 +1144,14 @@ const FIELD_HINT = {
 // Video Library Organizer 重新分析時，這些欄位會依實際檔案與分析紀錄重寫；
 // 狀態、內容描述、重點、關鍵字、拍攝時間與自訂欄位的修改則會保留
 const ORGANIZER_OWNED = new Set(['filename', 'full_path', 'media_type', 'processed_time', 'md_path', 'backup_path', 'error']);
-const isOrganizerBatch = b => !!b && ['Markdown 路徑', '備份路徑', '錯誤原因'].every(h => (b.columns || []).includes(h));
+const isOrganizerBatch = b => !!b && (!!b.organizer_db || ['Markdown 路徑', '備份路徑', '錯誤原因'].every(h => (b.columns || []).includes(h)));
 function fieldHint(m, key) {
   const hints = FIELD_HINT[key] ? [FIELD_HINT[key]] : [];
-  if (ORGANIZER_OWNED.has(key) && isOrganizerBatch(S.batches.find(b => b.id === m.batch_id)))
+  const org = isOrganizerBatch(S.batches.find(b => b.id === m.batch_id));
+  if (ORGANIZER_OWNED.has(key) && org)
     hints.push('此欄位由 Video Library Organizer 產生，重新分析後會恢復原值');
+  if (key === 'status' && org)
+    hints.push('選 Organizer 的狀態（待處理、待確認、完成、失敗…）或清空時，會依分析進度顯示；已審核、已確認、需複查等人工狀態會保留');
   return hints.join('；');
 }
 P.editAll = LS.get('editAll', false);
@@ -1361,11 +1366,20 @@ $('#paneHist').addEventListener('click', async e => {
 /* ---- Excel 同步狀態 ---- */
 let syncTimer, syncData = [];
 const extNotified = new Set();
+let dataVersion = null;  // 伺服器端清冊內容的版本；Organizer 分析出新結果時會遞增
 async function pollSync(soon) {
   clearTimeout(syncTimer);
   if (soon) { syncTimer = setTimeout(() => pollSync(), 900); return; }
-  try { syncData = (await api('/api/sync')).batches; renderSync(); } catch { }
-  syncTimer = setTimeout(() => pollSync(), syncData.some(b => b.pending) ? 2000 : 8000);
+  try {
+    const d = await api('/api/sync');
+    syncData = d.batches; renderSync();
+    // 正在編輯時先不重新載入，避免打斷輸入；下次輪詢再更新
+    const editing = document.querySelector('.cell-ed, .ed:focus, .tag-in:focus, .tt[contenteditable="true"]');
+    if (dataVersion !== null && d.version !== dataVersion && !editing) await load();
+    if (dataVersion === null || !editing) dataVersion = d.version;
+  } catch { }
+  const live = syncData.some(b => b.organizer_db);
+  syncTimer = setTimeout(() => pollSync(), syncData.some(b => b.pending) ? 2000 : live ? 4000 : 8000);
 }
 const SYNC_TXT = {
   ok: ['✓', 'Excel 已同步'], pending: ['⟳', '寫入 Excel 中…'], locked: ['⚠', 'Excel 開啟中，關閉後自動寫入'],
@@ -1411,6 +1425,7 @@ function renderBatches() {
       <div class="t">${esc(b.source_name)}</div>
       <div class="bp" title="${esc(s.source_path || b.source_path || '')}">${esc(s.source_path || b.source_path || '未連結原始 Excel 檔案')}</div>
       <div class="bs s-${esc(s.state || '')}" title="${esc(s.msg || '')}">${SYNC_TXT[s.state]?.[0] || ''} ${esc(s.msg || '')}${s.pending ? `（${s.pending} 項）` : ''}${s.external_changed ? '<br>⚠ Excel 已在外部修改' : ''}</div>
+      ${s.organizer_db ? `<div class="bs s-${s.organizer?.state === 'ok' ? 'ok' : 'locked'}" title="${esc(s.organizer_db)}">🔗 ${esc(s.organizer?.msg || '已連結 Organizer 資料庫')}・自動更新</div>` : ''}
       <div class="s">${esc(b.sheet)}・${b.row_count} 筆・${fmtDate(b.imported_at)}</div>
       <div class="ba">
         <button class="link" data-link="${b.id}" title="指定原始 Excel 位置，之後的修改會寫回此檔">${s.source_path || b.source_path ? '變更檔案' : '連結原始檔'}</button>

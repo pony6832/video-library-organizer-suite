@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>影像圖書館</title>
-<link rel="stylesheet" href="style.css?v=3">
+<link rel="stylesheet" href="style.css?v=4">
 </head>
 <body>
 <header class="topbar">
@@ -274,10 +274,10 @@
 <dialog id="importDlg" class="dlg">
   <form method="dialog">
     <h2>匯入媒體清冊</h2>
-    <h4>方式一：輸入 Excel 檔案路徑（建議）</h4>
-    <p class="muted">以路徑匯入時，之後在面板上的修改會即時寫回這個 Excel 檔案。</p>
+    <h4>方式一：輸入 Excel 檔案或資料夾路徑（建議）</h4>
+    <p class="muted">以路徑匯入時，之後在面板上的修改會即時寫回這個 Excel 檔案。輸入 Video Library Organizer 分析過的資料夾時，會直接連結它的分析資料庫，分析出新結果會自動顯示。</p>
     <div class="row-in">
-      <input id="impPath" class="full" placeholder="例如 C:\Users\me\Desktop\1028女神林襄_媒體清冊.xlsx（在檔案總管按 Shift+右鍵 →「複製路徑」）">
+      <input id="impPath" class="full" placeholder="例如 D:\影片\1028女神林襄 或 C:\Users\me\Desktop\1028女神林襄_媒體清冊.xlsx（在檔案總管按 Shift+右鍵 →「複製路徑」）">
       <button type="button" class="btn primary" id="impPathBtn">匯入</button>
     </div>
     <h4>方式二：選擇檔案上傳</h4>
@@ -293,6 +293,6 @@
 <div class="dropzone" id="dropzone" hidden><div>放開以匯入媒體清冊 Excel</div></div>
 <div class="toast" id="toast" hidden></div>
 
-<script src="app.js?v=3"></script>
+<script src="app.js?v=4"></script>
 </body>
 </html>

@@ -27,11 +27,13 @@ from fastapi.responses import FileResponse, JSONResponse, Response, StreamingRes
 from fastapi.staticfiles import StaticFiles
 import openpyxl
 
+import organizer_link
+
 FROZEN = getattr(sys, "frozen", False)
 # 打包成 exe 時：資料、設定放在 exe 旁邊；網頁檔案在 exe 內部
 BASE = Path(sys.executable).resolve().parent if FROZEN else Path(__file__).resolve().parent
 STATIC = Path(getattr(sys, "_MEIPASS", BASE)) / "static"
-__version__ = "1.2.0"
+__version__ = "1.3.0"
 APP_ID = "video-library-viewer"
 
 
@@ -79,6 +81,8 @@ FIELD_LABEL = {v: k for k, v in COLUMN_MAP.items()}
 # 面板上的使用者欄位；可選擇是否一併寫回 Excel（會新增欄位）
 USER_COLUMNS = {"挑選": "picked", "評等": "rating", "備註": "note"}
 USER_LABEL = {v: k for k, v in USER_COLUMNS.items()}
+# 連結 Organizer 資料庫時，人工修改會被保留的欄位
+ORGANIZER_CONTENT = frozenset(organizer_link.CONTENT_FIELDS.values())
 KW_SPLIT = re.compile(r"[、，,;；|\n]+")
 HL_SPLIT = re.compile(r"[；;\n]+")
 
@@ -183,13 +187,20 @@ def init_db():
         )
         # 舊版資料庫升級
         have = {r["name"] for r in c.execute("PRAGMA table_info(batches)")}
-        for col, typ in (("source_path", "TEXT"), ("src_mtime", "REAL"), ("last_sync", "TEXT")):
+        # organizer_db：Organizer 的 catalog.sqlite；db_stamp：上次讀取時的修改時間；
+        # org_baseline：清冊是否有 Organizer 的隱藏比對表（可分辨哪些儲存格是人工修改）
+        for col, typ in (("source_path", "TEXT"), ("src_mtime", "REAL"), ("last_sync", "TEXT"),
+                         ("organizer_db", "TEXT"), ("db_stamp", "REAL"), ("org_baseline", "INTEGER")):
             if col not in have:
                 c.execute(f"ALTER TABLE batches ADD COLUMN {col} {typ}")
         have = {r["name"] for r in c.execute("PRAGMA table_info(media)")}
         if "xl_key" not in have:
             c.execute("ALTER TABLE media ADD COLUMN xl_key TEXT")
             c.execute("UPDATE media SET xl_key=full_path")
+        # db_values：Organizer 資料庫目前的值；manual：人工修改過、不隨 Organizer 更新的欄位
+        for col, typ in (("db_values", "TEXT"), ("manual", "TEXT DEFAULT '[]'")):
+            if col not in have:
+                c.execute(f"ALTER TABLE media ADD COLUMN {col} {typ}")
 
 
 def now_iso():
@@ -223,16 +234,55 @@ def import_workbook(src, source_name, source_path=None, only_batch=None):
     """
     wb = openpyxl.load_workbook(src, read_only=True, data_only=True)
     try:
-        return _import_wb(wb, source_name, source_path, only_batch)
+        res = _import_wb(wb, source_name, source_path, only_batch)
     finally:
         wb.close()  # read_only 模式會一直佔用檔案，必須關閉，否則 Excel 無法存檔
+    if res.get("organizer"):
+        for bid in res["batches"]:
+            sync_from_organizer(bid, force=True)
+    _data_version[0] += 1
+    return res
+
+
+def _organizer_excel_row(exist, rec, baseline, pending):
+    """
+    Organizer 清冊：Excel 中只套用人工修改，其餘欄位以 Organizer 資料庫為準（由 sync_from_organizer 更新），
+    避免較舊的 Excel 蓋掉資料庫中較新的分析結果。回傳 (要寫入的值, 人工修改的欄位)
+    """
+    manual = set(json.loads(exist["manual"] or "[]")) if exist else set()
+    db_values = json.loads(exist["db_values"]) if exist and exist["db_values"] else None
+    base = baseline.get(organizer_link.path_key(rec["full_path"])) if baseline is not None else None
+    out = dict(rec)
+    for field in organizer_link.CONTENT_FIELDS.values():
+        v = rec.get(field)
+        if base is not None:
+            human = organizer_link.is_human_value(field, v) and v != base[field]
+        else:
+            # 比對表中沒有這一列（不是 Organizer 寫的，例如面板新增的列）時，非空白的值都是人工填寫；
+            # 舊版清冊沒有比對表，交給 sync_from_organizer 依時間判斷
+            human = baseline is not None and organizer_link.is_human_value(field, v)
+        if human:
+            manual.add(field)
+        elif exist is not None:
+            if field in manual and base is not None and (exist["id"], field) not in pending:
+                manual.discard(field)  # 在 Excel 中改回了分析結果
+                out[field] = db_values.get(field, v) if db_values else v
+            else:
+                out[field] = exist[field]
+    if db_values:
+        for field in organizer_link.OWNED_FIELDS:
+            out[field] = exist[field]
+    return out, manual
 
 
 def _import_wb(wb, source_name, source_path, only_batch):
     total, inserted, updated, changed = 0, 0, 0, 0
     batch_ids = []
     fields = list(COLUMN_MAP.values())
+    org_db = organizer_link.database_beside(source_path)
+    baseline = organizer_link.read_baseline(wb) if org_db else None
     with _db_lock, db() as c:
+        pending = {(r["media_id"], r["field"]) for r in c.execute("SELECT media_id, field FROM sync_queue")}
         for ws in wb.worksheets:
             if ws.sheet_state != "visible":  # 例如 Organizer 的隱藏比對表
                 continue
@@ -264,6 +314,9 @@ def _import_wb(wb, source_name, source_path, only_batch):
                 bid = c.execute(
                     "INSERT INTO batches(source_name, sheet, imported_at, row_count, columns, source_path) "
                     "VALUES(?,?,?,?,?,?)", (source_name, ws.title, now_iso(), 0, cols_json, source_path)).lastrowid
+            if org_db:
+                c.execute("UPDATE batches SET organizer_db=?, org_baseline=? WHERE id=?",
+                          (org_db, int(baseline is not None), bid))
             batch_ids.append(bid)
             n = 0
             for row_no, r in enumerate(rows, start=header_row + 1):
@@ -285,9 +338,14 @@ def _import_wb(wb, source_name, source_path, only_batch):
                 if not rec.get("filename"):
                     rec["filename"] = re.split(r"[\\/]", rec["full_path"])[-1]
                 n += 1
-                vals = [rec.get(f) for f in fields]
                 exist = c.execute("SELECT * FROM media WHERE full_path=? OR xl_key=? LIMIT 1",
                                   (rec["full_path"], rec["full_path"])).fetchone()
+                if org_db:
+                    rec, manual = _organizer_excel_row(exist, rec, baseline, pending)
+                else:
+                    manual = set(json.loads(exist["manual"] or "[]")) if exist else set()
+                manual_json = json.dumps(sorted(manual))
+                vals = [rec.get(f) for f in fields]
                 if exist:
                     # 記錄 Excel 端的變更
                     old_extra = json.loads(exist["extra"] or "{}")
@@ -306,18 +364,19 @@ def _import_wb(wb, source_name, source_path, only_batch):
                     sets = ",".join(f"{f}=?" for f in fields)
                     uset = "".join(f", {k}=?" for k in user)
                     c.execute(
-                        f"UPDATE media SET {sets}, extra=?, batch_id=?, row_no=?, xl_key=?, updated_at=?{uset} WHERE id=?",
-                        vals + [json.dumps(extra, ensure_ascii=False), bid, row_no, rec["full_path"], now_iso()]
-                        + list(user.values()) + [exist["id"]],
+                        f"UPDATE media SET {sets}, extra=?, batch_id=?, row_no=?, xl_key=?, updated_at=?, manual=?{uset} "
+                        "WHERE id=?",
+                        vals + [json.dumps(extra, ensure_ascii=False), bid, row_no, rec["full_path"], now_iso(),
+                                manual_json] + list(user.values()) + [exist["id"]],
                     )
                     updated += 1
                 else:
                     ucols = "".join(f", {k}" for k in user)
                     c.execute(
-                        f"INSERT INTO media({','.join(fields)}, extra, batch_id, row_no, xl_key, updated_at{ucols}) "
-                        f"VALUES({','.join('?' * (len(fields) + 5 + len(user)))})",
-                        vals + [json.dumps(extra, ensure_ascii=False), bid, row_no, rec["full_path"], now_iso()]
-                        + list(user.values()),
+                        f"INSERT INTO media({','.join(fields)}, extra, batch_id, row_no, xl_key, updated_at, manual{ucols}) "
+                        f"VALUES({','.join('?' * (len(fields) + 6 + len(user)))})",
+                        vals + [json.dumps(extra, ensure_ascii=False), bid, row_no, rec["full_path"], now_iso(),
+                                manual_json] + list(user.values()),
                     )
                     inserted += 1
             mtime = os.path.getmtime(source_path) if source_path and os.path.exists(source_path) else None
@@ -325,7 +384,7 @@ def _import_wb(wb, source_name, source_path, only_batch):
             total += n
     start_probe_all()
     return {"rows": total, "inserted": inserted, "updated": updated, "changed": changed, "batches": batch_ids,
-            "source_path": source_path}
+            "source_path": source_path, "organizer": bool(org_db)}
 
 
 def locate_source(data, filename):
@@ -400,6 +459,9 @@ def set_fields(media_id, changes, source="edit", c=None):
             if not m:
                 raise HTTPException(404, "找不到此媒體")
             extra = json.loads(m["extra"] or "{}")
+            db_values = json.loads(m["db_values"]) if m["db_values"] else None
+            manual = set(json.loads(m["manual"] or "[]"))
+            manual_before = set(manual)
             done = []
             for field, raw in changes.items():
                 if field not in FIELD_LABEL and field not in USER_LABEL and not field.startswith("x:"):
@@ -407,6 +469,13 @@ def set_fields(media_id, changes, source="edit", c=None):
                 if field.startswith("x:") and (not field[2:].strip() or field[2:] in COLUMN_MAP or field[2:] in USER_COLUMNS):
                     raise HTTPException(400, f"欄位名稱無效：{field[2:]}")
                 new = norm_value(field, raw)
+                if db_values is not None and field in ORGANIZER_CONTENT:
+                    # Organizer 清冊：空白與 Organizer 的狀態標籤會由分析結果決定（Organizer 重建 Excel 時也是如此）
+                    if organizer_link.is_human_value(field, new) and new != db_values.get(field):
+                        manual.add(field)
+                    else:
+                        manual.discard(field)
+                        new = db_values.get(field)
                 old = extra.get(field[2:]) if field.startswith("x:") else m[field]
                 if (old if old not in ("",) else None) == (new if new not in ("",) else None):
                     continue
@@ -433,6 +502,8 @@ def set_fields(media_id, changes, source="edit", c=None):
                     c.execute("INSERT OR REPLACE INTO sync_queue(media_id, field, seq) VALUES(?,?,?)",
                               (media_id, field, _sync_seq[0]))
                 done.append(field)
+            if manual != manual_before:
+                c.execute("UPDATE media SET manual=? WHERE id=?", (json.dumps(sorted(manual)), media_id))
             if own:
                 c.commit()
     finally:
@@ -541,6 +612,110 @@ def sync_worker():
             sync_once()
         except Exception as e:
             print("同步錯誤：", e)
+        try:
+            poll_organizer()
+        except Exception as e:
+            print("讀取 Organizer 資料庫錯誤：", e)
+
+
+# ---------------------------------------------------------------- 連結 Organizer 資料庫
+
+_data_version = [0]   # 清冊內容有變動時遞增，面板據此重新載入清單
+_org_state = {}       # batch_id -> {"state", "msg", "at"}
+_org_checked = set()  # 已檢查過旁邊有沒有 Organizer 資料庫的批次
+
+
+def sync_from_organizer(bid, force=False):
+    """從 Organizer 的資料庫更新分析結果；人工修改過的欄位與尚未寫入 Excel 的修改不會被覆蓋"""
+    with db() as c:
+        b = c.execute("SELECT * FROM batches WHERE id=?", (bid,)).fetchone()
+    if not b or not b["organizer_db"]:
+        return 0
+    path = b["organizer_db"]
+    stamp = organizer_link.db_stamp(path)
+    if not stamp:
+        _org_state[bid] = {"state": "error", "msg": f"找不到 Organizer 資料庫：{path}", "at": now_iso()}
+        return 0
+    if not force and b["db_stamp"] and stamp <= b["db_stamp"]:
+        return 0
+    try:
+        records = organizer_link.read_records(path)
+    except sqlite3.Error as e:  # Organizer 正在寫入或檔案暫時無法讀取：下次再試
+        _org_state[bid] = {"state": "busy", "msg": f"暫時無法讀取 Organizer 資料庫（{e}）", "at": now_iso()}
+        return 0
+    src = b["source_path"]
+    excel_mtime = os.path.getmtime(src) if src and os.path.exists(src) else None
+    fields = list(COLUMN_MAP.values())
+    inserted = changed = 0
+    with _db_lock, db() as c:
+        pending = {(r["media_id"], r["field"]) for r in c.execute("SELECT media_id, field FROM sync_queue")}
+        existing = {}
+        for m in c.execute("SELECT * FROM media"):
+            existing.setdefault(organizer_link.path_key(m["full_path"]), m)
+        for key, gen in records.items():
+            analysed_at = gen.pop("_updated")
+            db_json = json.dumps(gen, ensure_ascii=False, sort_keys=True)
+            m = existing.get(key)
+            if m is None:  # Organizer 新掃描到的影片（Excel 可能還沒更新）
+                c.execute(
+                    f"INSERT INTO media({','.join(fields)}, extra, batch_id, row_no, xl_key, updated_at, db_values, manual) "
+                    f"VALUES({','.join('?' * (len(fields) + 7))})",
+                    [gen.get(f) for f in fields] + ["{}", bid, None, gen["full_path"], now_iso(), db_json, "[]"])
+                inserted += 1
+                continue
+            if m["db_values"] == db_json:
+                continue
+            manual = set(json.loads(m["manual"] or "[]"))
+            if m["db_values"] is None and not b["org_baseline"] and excel_mtime and analysed_at                     and analysed_at <= excel_mtime:
+                # 舊版清冊（沒有比對表）第一次連結：Excel 比分析紀錄新，與分析結果不同的內容視為人工修改，
+                # 與 Organizer 重建 Excel 時的判斷相同
+                for f in ORGANIZER_CONTENT - {"status"}:
+                    if m[f] is not None and m[f] != gen[f]:
+                        manual.add(f)
+            updates = {f: gen[f] for f in organizer_link.OWNED_FIELDS if m[f] != gen[f]}
+            updates.update({f: gen[f] for f in ORGANIZER_CONTENT
+                            if f not in manual and (m["id"], f) not in pending and m[f] != gen[f]})
+            for f, v in updates.items():
+                c.execute("INSERT INTO edits(media_id, field, old, new, at, source) VALUES(?,?,?,?,?,?)",
+                          (m["id"], f, m[f], v, now_iso(), "organizer"))
+            sets = "".join(f"{f}=?, " for f in updates)
+            c.execute(f"UPDATE media SET {sets}db_values=?, manual=?, updated_at=? WHERE id=?",
+                      list(updates.values()) + [db_json, json.dumps(sorted(manual)), now_iso(), m["id"]])
+            changed += bool(updates)
+        c.execute("UPDATE batches SET db_stamp=?, row_count=(SELECT COUNT(*) FROM media WHERE batch_id=?) WHERE id=?",
+                  (stamp, bid, bid))
+    _org_state[bid] = {"state": "ok", "msg": f"已連結 Organizer 資料庫（{len(records)} 部）", "at": now_iso()}
+    if inserted or changed:
+        _data_version[0] += 1
+    if inserted:
+        start_probe_all()
+    return inserted + changed
+
+
+def poll_organizer():
+    """定期檢查：新匯入的清冊旁是否有 Organizer 資料庫、資料庫或 Excel 是否被 Organizer 更新"""
+    with db() as c:
+        batches = c.execute("SELECT * FROM batches WHERE source_path IS NOT NULL").fetchall()
+        busy = {r["batch_id"] for r in c.execute(
+            "SELECT DISTINCT m.batch_id FROM sync_queue q JOIN media m ON m.id=q.media_id")}
+    for b in batches:
+        src = b["source_path"]
+        if not os.path.exists(src):
+            continue
+        if not b["organizer_db"]:
+            if b["id"] not in _org_checked:
+                _org_checked.add(b["id"])
+                if organizer_link.database_beside(src):  # 舊版面板匯入的 Organizer 清冊：重新匯入以建立連結
+                    import_workbook(src, b["source_name"], src, only_batch=b["id"])
+            continue
+        # Organizer 重建了 Excel：自動套用其中的人工修改（有修改尚未寫入 Excel 時等寫完再讀）
+        if b["id"] not in busy and b["src_mtime"] and os.path.getmtime(src) > b["src_mtime"] + 1:
+            try:
+                import_workbook(src, b["source_name"], src, only_batch=b["id"])
+                continue
+            except Exception as e:  # 檔案正被寫入或鎖定：下次再試
+                print("重新載入 Excel 失敗：", e)
+        sync_from_organizer(b["id"])
 
 
 def sync_status():
@@ -563,8 +738,10 @@ def sync_status():
                 st = {"state": "pending", "msg": "等待寫入"}
             if not CONFIG.get("sync_excel", True) and path:
                 st = {"state": "off", "msg": "已關閉自動寫回 Excel"}
+            org = b["organizer_db"]
             out.append({"id": b["id"], "source_name": b["source_name"], "source_path": path, "pending": n,
-                        "last_sync": b["last_sync"], "external_changed": ext and not n, **st})
+                        "last_sync": b["last_sync"], "external_changed": ext and not n and not org, **st,
+                        "organizer_db": org, "organizer": _org_state.get(b["id"]) if org else None})
     return out
 
 
@@ -957,6 +1134,20 @@ async def api_import(file: UploadFile = File(...)):
     return res
 
 
+def resolve_import_path(p):
+    """Excel 清冊，或 Organizer 的來源資料夾／「媒體整理成果」資料夾／catalog.sqlite"""
+    p = (p or "").strip().strip('"')
+    if p.lower().endswith(organizer_link.DB_NAME):
+        p = os.path.dirname(p)
+    if p and os.path.isdir(p):
+        found = organizer_link.find_catalog(p)
+        if not found:
+            expected = os.path.join(organizer_link.RESULT_DIR, organizer_link.DB_NAME)
+            raise HTTPException(400, f"這個資料夾中找不到 Video Library Organizer 的成果（{expected} 與媒體清冊）")
+        return found[0]
+    return check_xlsx_path(p)
+
+
 def check_xlsx_path(p):
     p = (p or "").strip().strip('"')
     if not p or not os.path.isfile(p):
@@ -968,7 +1159,7 @@ def check_xlsx_path(p):
 
 @app.post("/api/import_path")
 async def api_import_path(request: Request):
-    p = check_xlsx_path((await request.json()).get("path"))
+    p = resolve_import_path((await request.json()).get("path"))
     try:
         return import_workbook(p, os.path.basename(p), p)
     except PermissionError:
@@ -1020,7 +1211,7 @@ async def reload_batch(batch_id: int, request: Request):
 
 @app.get("/api/sync")
 def api_sync():
-    return {"batches": sync_status()}
+    return {"batches": sync_status(), "version": _data_version[0]}
 
 
 @app.post("/api/sync")
