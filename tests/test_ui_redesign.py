@@ -182,6 +182,6 @@ def test_missing_media_library_explains_where_to_get_it(tmp_path, monkeypatch):
         app._open_viewer()
         title, message = app.messagebox.showerror.call_args.args
         assert title == "找不到影像圖書館"
-        assert "github.com/pony6832/video-library-viewer" in message
+        assert "github.com/pony6832/video-library-organizer-suite" in message
     finally:
         root.destroy()

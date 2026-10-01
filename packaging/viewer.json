@@ -1,9 +1,0 @@
-{
-  "repo": "pony6832/video-library-viewer",
-  "version": "1.4.0",
-  "tag": "v1.4.0",
-  "assets": {
-    "VideoLibraryViewer.exe": "0d050fda3d23749c51624da7d9e31d7fd4ed0e07992ff752ccbe8773edb4f93d",
-    "LAN-share.bat": "965cc767b496724a55a91e913fc14c9e7cd5f90048b23843d32b7be437256934"
-  }
-}

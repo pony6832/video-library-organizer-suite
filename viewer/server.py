@@ -33,7 +33,7 @@ FROZEN = getattr(sys, "frozen", False)
 # 打包成 exe 時：資料、設定放在 exe 旁邊；網頁檔案在 exe 內部
 BASE = Path(sys.executable).resolve().parent if FROZEN else Path(__file__).resolve().parent
 STATIC = Path(getattr(sys, "_MEIPASS", BASE)) / "static"
-__version__ = "1.4.0"
+__version__ = "1.4.1"
 APP_ID = "video-library-viewer"
 
 

@@ -45,7 +45,7 @@ SLOW_BYTES_PER_S = 200_000  # 平均低於 200 KB/s 就改用下一個來源（�
 
 class SlowSource(Exception):
     pass
-UA = {"User-Agent": "VideoLibraryViewer/1.1 (+https://github.com/pony6832/video-library-viewer)"}
+UA = {"User-Agent": "VideoLibraryViewer/1.1 (+https://github.com/pony6832/video-library-organizer-suite)"}
 
 
 def _open(url, timeout=30):

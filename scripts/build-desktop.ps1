@@ -32,27 +32,15 @@ try {
     # pyproject.toml is the single source of the release version.
     $appVersion = (& $python -c "import sys, tomllib; print(tomllib.load(open(sys.argv[1], 'rb'))['project']['version'])" (Join-Path $projectRoot 'pyproject.toml')).Trim()
     if ($LASTEXITCODE -ne 0 -or -not $appVersion) { throw 'Cannot read version from pyproject.toml' }
-    # The media library panel ships as the pinned VideoLibraryViewer release,
-    # verified by SHA-256; it is installed beside the desktop app in viewer\.
-    $viewerPin = Get-Content -LiteralPath packaging/viewer.json -Raw -Encoding UTF8 | ConvertFrom-Json
-    $viewerDir = Join-Path $work 'viewer'
+    # The media library panel (viewer\) is built from this repository and
+    # installed beside the desktop app in {app}\viewer. Its own build script
+    # keeps a separate virtual environment in viewer\.venv.
+    & powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $projectRoot 'viewer\packaging\build.ps1')
+    if ($LASTEXITCODE -ne 0) { throw 'Viewer build failed' }
+    $viewerDir = Join-Path $release 'viewer'
     New-Item -ItemType Directory -Path $viewerDir | Out-Null
-    # The viewer repository may be private: download through the signed-in
-    # GitHub CLI when present, otherwise anonymously (TLS 1.2 for PowerShell 5.1).
-    $gh = Get-Command gh -ErrorAction SilentlyContinue
-    foreach ($asset in $viewerPin.assets.PSObject.Properties) {
-        $target = Join-Path $viewerDir $asset.Name
-        if ($gh) {
-            & $gh.Source release download $viewerPin.tag --repo $viewerPin.repo --pattern $asset.Name --dir $viewerDir
-            if ($LASTEXITCODE -ne 0) { throw "Cannot download $($asset.Name) from $($viewerPin.repo) $($viewerPin.tag)" }
-        } else {
-            [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-            Invoke-WebRequest -UseBasicParsing -OutFile $target `
-                -Uri "https://github.com/$($viewerPin.repo)/releases/download/$($viewerPin.tag)/$($asset.Name)"
-        }
-        $actual = (Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash
-        if ($actual -ne $asset.Value.ToUpperInvariant()) { throw "SHA-256 mismatch for $($asset.Name): $actual" }
-    }
+    Copy-Item -LiteralPath (Join-Path $projectRoot 'viewer\dist\VideoLibraryViewer.exe'),
+                           (Join-Path $projectRoot 'viewer\packaging\LAN-share.bat') -Destination $viewerDir
     & $compiler /Q "/DBundleDir=$bundle" "/DReleaseDir=$release" "/DAppVersion=$appVersion" "/DViewerDir=$viewerDir" packaging/MediaCatalogVideoDesktop.iss
     if ($LASTEXITCODE -ne 0) { throw 'Inno Setup failed' }
     $files = @(Get-ChildItem -LiteralPath $release -Recurse -File)

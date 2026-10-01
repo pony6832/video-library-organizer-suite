@@ -1,4 +1,4 @@
-name: Build exe
+name: Viewer exe
 
 on:
   push:
@@ -8,6 +8,10 @@ on:
 
 permissions:
   contents: read
+
+defaults:
+  run:
+    working-directory: viewer
 
 jobs:
   build:
@@ -36,4 +40,4 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: VideoLibraryViewer
-          path: dist/VideoLibraryViewer.exe
+          path: viewer/dist/VideoLibraryViewer.exe

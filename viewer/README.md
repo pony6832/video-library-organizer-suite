@@ -1,11 +1,11 @@
 # Video Library Viewer 影像圖書館
 
-把 [Video Library Organizer](https://github.com/pony6832/video-library-organizer) 產生的「媒體清冊」Excel，變成可以瀏覽、搜尋、挑選和播放的影像圖書館總目錄。清冊的每個欄位都能直接編輯，修改會即時寫回原始 Excel。
+影像搜尋資料庫的一部分。把 [Video Library Organizer](../README.md) 產生的「媒體清冊」Excel，變成可以瀏覽、搜尋、挑選和播放的影像圖書館總目錄。清冊的每個欄位都能直接編輯，修改會即時寫回原始 Excel。
 
 <img src="packaging/app.png" width="96" alt="icon">
 
 ## 快速上手（不需要安裝 Python、Codex 或 Claude）
-1. 到 [Releases](../../releases) 下載 `VideoLibraryViewer.exe`
+1. 到 [Releases](https://github.com/pony6832/video-library-organizer-suite/releases) 下載 `VideoLibraryViewer.exe`
 2. 在 D 槽或桌面建立一個資料夾，例如 `D:\影像圖書館\`，把 exe 放進去
    - 不建議放在 `C:\Program Files`。那裡無法寫入，資料會改存到 `%LOCALAPPDATA%\VideoLibraryViewer`
 3. 雙擊 `VideoLibraryViewer.exe`
@@ -85,7 +85,7 @@ python -m pip install -r requirements.txt
 python server.py --open                                         # 開發模式
 powershell -ExecutionPolicy Bypass -File packaging\build.ps1    # 建置 dist\VideoLibraryViewer.exe
 ```
-需要 Python 3.10 以上。每次推送到 `main`（或開 Pull Request）時，GitHub Actions 會自動建置 exe 並測試能否啟動。產出的 exe 可在 [Actions](../../actions) 該次執行頁面最下方的 Artifacts 下載（設定檔：`.github/workflows/build.yml`）。
+需要 Python 3.10 以上。每次推送到 `main`（或開 Pull Request）時，GitHub Actions 會自動建置 exe 並測試能否啟動。產出的 exe 可在 [Actions](https://github.com/pony6832/video-library-organizer-suite/actions) 該次執行頁面最下方的 Artifacts 下載（設定檔：倉庫根目錄的 `.github/workflows/viewer.yml`）。
 
 ## 專案結構
 ```

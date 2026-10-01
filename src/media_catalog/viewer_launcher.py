@@ -15,7 +15,7 @@ import sys
 from .process_utils import credential_free_environment
 
 VIEWER_EXE = "VideoLibraryViewer.exe"
-VIEWER_DOWNLOAD_URL = "https://github.com/pony6832/video-library-viewer/releases"
+VIEWER_DOWNLOAD_URL = "https://github.com/pony6832/video-library-organizer-suite/releases"
 # Development builds can point at a viewer elsewhere.
 VIEWER_ENV = "VIDEO_LIBRARY_VIEWER"
 

@@ -25,13 +25,16 @@ def run(command, *, env, timeout=120):
     return result
 
 
-def check_bundled_viewer(installed, fixture, records, env):
+def check_bundled_viewer(release, installed, fixture, records, env):
     """The installer's media library panel opens the analysed folder and reads its database."""
+    import re
     import time
     import urllib.request
-    pin = json.loads((PROJECT / 'packaging' / 'viewer.json').read_text(encoding='utf-8'))
+    source = (PROJECT / 'viewer' / 'server.py').read_text(encoding='utf-8')
+    version = re.search(r'^__version__ = "([^"]+)"', source, re.M).group(1)
     viewer = installed / 'viewer' / 'VideoLibraryViewer.exe'
-    assert hashlib.sha256(viewer.read_bytes()).hexdigest() == pin['assets']['VideoLibraryViewer.exe']
+    built = release / 'viewer' / 'VideoLibraryViewer.exe'
+    assert hashlib.sha256(viewer.read_bytes()).digest() == hashlib.sha256(built.read_bytes()).digest()
     assert (installed / 'viewer' / 'LAN-share.bat').is_file()
     port = 18790
     process = subprocess.Popen([str(viewer), '--port', str(port), '--no-browser', '--import', str(fixture)],
@@ -52,7 +55,7 @@ def check_bundled_viewer(installed, fixture, records, env):
             time.sleep(0.5)
         else:
             raise RuntimeError('bundled viewer did not import the folder')
-        assert api('/api/status')['version'] == pin['version']
+        assert api('/api/status')['version'] == version
         assert batches[0]['organizer_db'], 'viewer did not link the analysis database'
         items = api('/api/media')['items']
         assert sorted(i['filename'] for i in items) == sorted(r.path.name for r in records)
@@ -60,7 +63,7 @@ def check_bundled_viewer(installed, fixture, records, env):
     finally:
         subprocess.run(['taskkill', '/F', '/T', '/PID', str(process.pid)], capture_output=True,
                        creationflags=subprocess.CREATE_NO_WINDOW)
-    return pin['version']
+    return version
 
 
 def main():
@@ -118,7 +121,7 @@ def main():
     assert sheet.max_row == 2 and sheet.max_column == 12 and sheet['C2'].hyperlink
     workbook.close()
     assert before == {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in (video, photo)}
-    viewer_version = check_bundled_viewer(installed, fixture, records, env)
+    viewer_version = check_bundled_viewer(release, installed, fixture, records, env)
     receipt = {'installed_exe': str(exe), 'fixture': str(fixture), 'local_analysis': args.analyze,
                'video_records': len(records), 'photos_in_catalog': 0, 'original_sha256': before,
                'excel_rows': 2, 'excel_columns': 12, 'file_hyperlink': True, 'paid_api_calls': False,
