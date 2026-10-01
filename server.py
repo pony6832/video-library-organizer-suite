@@ -31,7 +31,7 @@ FROZEN = getattr(sys, "frozen", False)
 # 打包成 exe 時：資料、設定放在 exe 旁邊；網頁檔案在 exe 內部
 BASE = Path(sys.executable).resolve().parent if FROZEN else Path(__file__).resolve().parent
 STATIC = Path(getattr(sys, "_MEIPASS", BASE)) / "static"
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 APP_ID = "video-library-viewer"
 
 
@@ -234,6 +234,8 @@ def _import_wb(wb, source_name, source_path, only_batch):
     fields = list(COLUMN_MAP.values())
     with _db_lock, db() as c:
         for ws in wb.worksheets:
+            if ws.sheet_state != "visible":  # 例如 Organizer 的隱藏比對表
+                continue
             rows = ws.iter_rows(values_only=True)
             header, header_row = None, 0
             for r in rows:  # 找到含「完整路徑」或「檔名」的標題列
