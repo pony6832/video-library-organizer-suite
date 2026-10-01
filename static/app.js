@@ -1543,10 +1543,121 @@ function mdToHtml(src) {
   return out.join('\n').replace(/<\/table>\n<table>/g, '');
 }
 
+/* ---------------- 環境檢查 / ffmpeg 自動安裝 ---------------- */
+const ENV_ICON = { ok: '✓', warn: '⚠', error: '✖', info: 'ℹ' };
+let envData = null, ffTimer = null;
+async function loadEnv() {
+  try { envData = await api('/api/env'); } catch { return null; }
+  $('#envDot').className = 'dot d-' + envData.overall;
+  $('#btnEnv').title = '環境檢查：' + ({ ok: '一切正常', warn: '有需要注意的項目', error: '缺少必要元件' }[envData.overall]);
+  renderEnvBanner();
+  if ($('#envDlg').open) renderEnv();
+  if (envData.ffmpeg_install?.state === 'running') watchFfmpeg();
+  return envData;
+}
+function renderEnvBanner() {
+  const b = $('#envBanner');
+  const ff = envData?.items.find(i => i.key === 'ffmpeg' || i.key === 'ffprobe');
+  const missing = envData?.items.some(i => i.action === 'install_ffmpeg');
+  const job = envData?.ffmpeg_install || {};
+  let dismissed = false; try { dismissed = sessionStorage.getItem('vl.envBanner') === '1'; } catch { }
+  if (!missing || dismissed) { b.hidden = true; return; }
+  b.hidden = false;
+  b.innerHTML = job.state === 'running'
+    ? `⟳ 正在下載安裝 ffmpeg… <strong>${Math.round((job.progress || 0) * 100)}%</strong> <button class="link" data-env="open">查看進度</button>`
+    : `⚠ 尚未安裝 <strong>ffmpeg</strong>，因此沒有縮圖、預覽和影片時長（仍可正常瀏覽和播放）。
+       <button class="btn sm primary" data-env="install">自動下載安裝（約 110 MB）</button>
+       <button class="btn sm" data-env="open">環境檢查</button>
+       <button class="link" data-env="dismiss" title="本次不再提示">稍後再說</button>`;
+}
+$('#envBanner').addEventListener('click', e => {
+  const a = e.target.closest('[data-env]')?.dataset.env; if (!a) return;
+  if (a === 'install') { openEnv(); installFfmpeg(); }
+  else if (a === 'open') openEnv();
+  else if (a === 'dismiss') { try { sessionStorage.setItem('vl.envBanner', '1'); } catch { } $('#envBanner').hidden = true; }
+});
+async function openEnv() { $('#envDlg').showModal(); renderEnv(); await loadEnv(); }
+$('#btnEnv').onclick = openEnv;
+$('#envRecheck').onclick = async () => { $('#envList').classList.add('busy'); await loadEnv(); $('#envList').classList.remove('busy'); toast('已重新檢查'); };
+function renderEnv() {
+  if (!envData) { $('#envList').innerHTML = '<div class="muted">檢查中…</div>'; return; }
+  $('#envVer').textContent = `版本 ${envData.version}${envData.frozen ? '' : '（原始碼執行）'}`;
+  const btn = { install_ffmpeg: '<button type="button" class="btn sm primary" data-envact="install_ffmpeg">自動下載安裝</button>',
+    create_shortcut: '<button type="button" class="btn sm" data-envact="create_shortcut">建立捷徑</button>',
+    open_settings: '<button type="button" class="btn sm" data-envact="open_settings">路徑對應設定</button>' };
+  const seen = new Set();
+  $('#envList').innerHTML = envData.items.map(i => {
+    let act = i.action && !seen.has(i.action) ? btn[i.action] || '' : '';
+    if (i.action) seen.add(i.action);
+    if (i.action === 'install_ffmpeg' && envData.ffmpeg_install?.state === 'running') act = '<span class="muted">安裝中…</span>';
+    return `<div class="env-row e-${i.status}"><span class="ei">${ENV_ICON[i.status]}</span>
+      <div class="el">${esc(i.label)}</div><div class="ed2">${esc(i.detail)}</div><div class="ea">${act}</div></div>`;
+  }).join('');
+  renderFfBox();
+}
+function renderFfBox() {
+  const box = $('#ffBox'), j = envData?.ffmpeg_install || {};
+  if (!j.state || j.state === 'idle') {
+    const need = envData?.items.some(i => i.action === 'install_ffmpeg');
+    box.hidden = !need;
+    if (need) box.innerHTML = `<p class="muted">會依序從 ${envData.sources.map(esc).join('、')} 下載，並以官方提供的 SHA-256 校驗碼驗證，
+      安裝到 <code>${esc(envData.ffmpeg_home)}</code>。不需要系統管理員權限，也不會修改系統設定。</p>`;
+    return;
+  }
+  box.hidden = false;
+  if (j.state === 'running') {
+    const mb = n => (n / 1048576).toFixed(0);
+    box.innerHTML = `<div><strong>${esc(j.phase || '')}</strong> <span class="muted">${esc(j.source || '')}</span></div>
+      <div class="progress wide"><div style="width:${Math.round((j.progress || 0) * 100)}%"></div></div>
+      <div class="muted">${j.total ? `${mb(j.downloaded)} / ${mb(j.total)} MB　${Math.round(j.progress * 100)}%` : ''}
+      ${j.speed ? `　${(j.speed / 1048576).toFixed(1)} MB/s` : ''}</div>
+      ${(j.errors || []).length ? `<div class="ff-err">${j.errors.map(esc).join('<br>')}<br>改用下一個來源…</div>` : ''}`;
+  } else if (j.state === 'done') {
+    box.innerHTML = `<div class="ff-ok">✓ ffmpeg ${esc(j.version || '')} 安裝完成（${esc(j.path || '')}）。正在背景讀取影片資訊並產生縮圖。</div>`;
+  } else if (j.state === 'error') {
+    box.innerHTML = `<div class="ff-err"><strong>✖ ${esc(j.msg || '安裝失敗')}</strong><br>${(j.errors || []).map(esc).join('<br>')}</div>
+      <p><strong>手動安裝：</strong>用瀏覽器下載 <a href="https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip" target="_blank" rel="noopener">ffmpeg-release-essentials.zip</a>，
+      解壓縮後把裡面的資料夾改名為 <code>ffmpeg</code>，放到 <code>${esc(envData.ffmpeg_home.replace(/\\ffmpeg$/, ''))}</code> 底下，再按「重新檢查」。</p>
+      <button type="button" class="btn sm" data-envact="install_ffmpeg">重試</button>`;
+  }
+}
+$('#envDlg').addEventListener('click', async e => {
+  const a = e.target.closest('[data-envact]')?.dataset.envact; if (!a) return;
+  if (a === 'install_ffmpeg') installFfmpeg();
+  else if (a === 'open_settings') { $('#envDlg').close(); openSettings(); }
+  else if (a === 'create_shortcut') {
+    try { const r = await api('/api/env/shortcut', { method: 'POST' }); toast('已在桌面建立捷徑：' + r.path, 4000); loadEnv(); }
+    catch (err) { toast(err.message, 5000); }
+  }
+});
+async function installFfmpeg() {
+  try {
+    envData.ffmpeg_install = await api('/api/env/ffmpeg', { method: 'POST' });
+    renderEnv(); renderEnvBanner(); watchFfmpeg();
+  } catch (err) { toast('無法開始安裝：' + err.message, 5000); }
+}
+function watchFfmpeg() {
+  clearTimeout(ffTimer);
+  ffTimer = setTimeout(async () => {
+    const j = await api('/api/env/ffmpeg').catch(() => null);
+    if (!j || !envData) return;
+    envData.ffmpeg_install = j;
+    if ($('#envDlg').open) renderFfBox();
+    renderEnvBanner();
+    if (j.state === 'running') watchFfmpeg();
+    else if (j.state === 'done') {
+      toast(`ffmpeg ${j.version} 安裝完成，正在產生縮圖…`, 5000);
+      await loadEnv(); spriteCache.clear();
+      setTimeout(load, 2500); setTimeout(load, 8000);
+    } else { loadEnv(); }
+  }, 700);
+}
+
 /* ---------------- 啟動 ---------------- */
 (async () => {
   try { await load(); } catch (e) { toast('無法連線到後端：' + e.message, 8000); return; }
   pollSync();
+  loadEnv();
   const h = location.hash.match(/m=(\d+)/);
   if (h && S.byId.has(+h[1])) openViewer(+h[1]);
   // 背景技術資訊（時長、解析度）讀取完成前，定期更新

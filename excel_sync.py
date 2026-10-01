@@ -168,12 +168,12 @@ def write_with_excel_com(path, sheet_name, entries):
         import win32com.client
     except ImportError:
         raise FileLocked("檔案被鎖定，且未安裝 pywin32")
-    pythoncom.CoInitialize()
-    try:
+    def _write():
+        # COM 物件只活在這個函式內，回傳前就會釋放（必須早於 CoUninitialize）；不在此丟例外以免 traceback 持有物件
         try:
             xl = win32com.client.GetActiveObject("Excel.Application")
         except Exception:
-            raise FileLocked("檔案被其他程式鎖定")
+            return None, "檔案被其他程式鎖定"
         target = None
         want = os.path.normcase(os.path.abspath(path))
         for wb in xl.Workbooks:
@@ -184,18 +184,28 @@ def write_with_excel_com(path, sheet_name, entries):
             except Exception:
                 continue
         if target is None:
-            raise FileLocked("檔案被其他程式鎖定（不是由 Excel 開啟）")
+            return None, "檔案被其他程式鎖定（不是由 Excel 開啟）"
         if target.ReadOnly:
-            raise FileLocked("Excel 以唯讀模式開啟此檔案")
+            return None, "Excel 以唯讀模式開啟此檔案"
         try:
             ws = target.Worksheets(sheet_name)
         except Exception:
             ws = target.Worksheets(1)
-        rows = apply_entries(ComSheet(ws), entries)
-        target.Save()
-        return rows
+        try:
+            rows = apply_entries(ComSheet(ws), entries)
+            target.Save()
+        except Exception as e:
+            return None, f"透過 Excel 寫入失敗：{e}"
+        return rows, None
+
+    pythoncom.CoInitialize()
+    try:
+        rows, err = _write()
     finally:
         pythoncom.CoUninitialize()
+    if err:
+        raise FileLocked(err)
+    return rows
 
 
 def write_entries(path, sheet_name, entries, allow_com=True):

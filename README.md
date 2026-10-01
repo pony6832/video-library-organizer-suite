@@ -4,21 +4,44 @@
 
 <img src="packaging/app.png" width="96" alt="icon">
 
-## 下載與執行（免安裝 Python）
+## 快速上手（不需要安裝 Python、Codex 或 Claude）
 1. 到 [Releases](../../releases) 下載 `VideoLibraryViewer.exe`
-2. 把它放在任一資料夾（例如 `D:\影像圖書館\`）後雙擊執行。程式會開一個主控台視窗，並自動開啟瀏覽器 `http://127.0.0.1:8765/`
-3. 點「匯入清冊」，輸入 Excel 路徑，或直接把 Excel 拖曳到網頁上
+2. 在 D 槽或桌面建立一個資料夾，例如 `D:\影像圖書館\`，把 exe 放進去
+   - 不建議放在 `C:\Program Files`。那裡無法寫入，資料會改存到 `%LOCALAPPDATA%\VideoLibraryViewer`
+3. 雙擊 `VideoLibraryViewer.exe`
+   - 如果出現藍色的「Windows 已保護您的電腦」視窗，按「**其他資訊**」→「**仍要執行**」（程式沒有數位簽章才會出現，只有第一次會問）
+4. 程式會先做**環境檢查**，接著自動開啟瀏覽器
+5. 第一次使用時，網頁上方會提示「尚未安裝 ffmpeg」。按「**自動下載安裝**」等它跑完（約 110 MB），縮圖和影片資訊就會自動產生
+6. 按右上角「**環境檢查**」→「**建立捷徑**」，之後從桌面「影像圖書館」開啟即可
+7. 點「匯入清冊」，輸入 Excel 路徑，或直接把 Excel 拖曳到網頁上
 
-- 關閉主控台視窗就會結束程式。程式已在執行時再雙擊一次，只會開啟瀏覽器
-- 資料庫、縮圖快取、Excel 備份放在 exe 旁邊的 `data\`；設定存在 `config.json`。整個資料夾搬到別處也能繼續使用
-- 要讓區網其他電腦連線：執行 `LAN-share.bat`（或 `VideoLibraryViewer.exe --host 0.0.0.0`），對方開啟 `http://你的IP:8765/`
-- 其他參數：`--port 8765`、`--import 清冊.xlsx`、`--no-browser`
+**日常使用**
+- 黑色的主控台視窗就是程式本體，關掉它程式就會結束。程式已在執行時再雙擊一次，只會開啟瀏覽器
+- 資料庫、縮圖、Excel 備份、ffmpeg 都放在 exe 旁邊（`data\`、`ffmpeg\`、`config.json`）。整個資料夾複製到別台電腦也能直接用
+- 要讓區網其他電腦連線：把 `LAN-share.bat` 放在 exe 旁邊並雙擊，對方開啟 `http://你的IP:8765/`
+- 連接埠 8765 被其他程式佔用時，會自動改用下一個可用的連接埠
 
-### ffmpeg（縮圖、預覽、讀取時長、轉檔代理檔需要）
-exe 會依序尋找：exe 旁的 `ffmpeg\bin\ffmpeg.exe` → exe 旁的 `ffmpeg.exe` → 系統 PATH。
-沒有 ffmpeg 也能瀏覽清冊和播放影片，只是沒有縮圖和技術資訊。安裝方式擇一：
-- `winget install Gyan.FFmpeg`
-- 從 <https://www.gyan.dev/ffmpeg/builds/> 下載 essentials 版，解壓縮後把資料夾改名為 `ffmpeg`，放在 exe 旁邊
+### 環境檢查
+啟動時，主控台會列出檢查結果；網頁右上角「環境檢查」按鈕旁的燈號是綠色／黃色／紅色，點開可以看詳細內容並一鍵處理。
+
+| 項目 | 說明 |
+|---|---|
+| 作業系統 | 建議 Windows 10／11 64 位元 |
+| 資料存放位置 | 程式資料夾不能寫入時，會自動改存到使用者資料夾 |
+| 磁碟可用空間 | 少於 2 GB 會提醒（代理檔和縮圖需要空間） |
+| ffmpeg／ffprobe | 縮圖、預覽、時長、轉檔代理檔需要；可一鍵自動下載安裝 |
+| Microsoft Excel | 有安裝時，清冊開著也能直接寫入；沒安裝也不影響使用 |
+| 長路徑支援 | 清冊路徑超過 260 字元又沒開啟長路徑時會提醒 |
+| 影片檔案存取 | 顯示清冊中有幾個影片讀得到，讀不到時可到「路徑對應」調整 |
+| 桌面捷徑 | 可一鍵建立 |
+
+指令列：`VideoLibraryViewer.exe --check`（只做檢查）、`--install-ffmpeg`（只安裝 ffmpeg）、`--port 8765`、`--host 0.0.0.0`、`--import 清冊.xlsx`、`--no-browser`
+
+### ffmpeg 自動安裝的運作方式
+- 依序從 [gyan.dev 官方 GitHub](https://github.com/GyanD/codexffmpeg/releases)（約 110 MB）、[GitHub BtbN/FFmpeg-Builds](https://github.com/BtbN/FFmpeg-Builds) 和 [gyan.dev 網站](https://www.gyan.dev/ffmpeg/builds/) 下載。每個檔案都會以官方提供的 **SHA-256 校驗碼**驗證，不符就捨棄；某個來源太慢（30 秒後低於 200 KB/s）時，會自動改用下一個
+- 只會把 `ffmpeg.exe`、`ffprobe.exe` 和授權檔放到程式資料夾的 `ffmpeg\`，不需要系統管理員權限，也不會修改系統 PATH 或登錄檔
+- 會自動使用 Windows 的 Proxy 設定。若公司網路擋下載，請手動下載 [ffmpeg-release-essentials.zip](https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip)，解壓縮後把資料夾改名為 `ffmpeg`，放到 exe 旁邊，再按「重新檢查」
+- 程式依序在這些位置尋找 ffmpeg：程式資料夾的 `ffmpeg\bin\` → exe 旁的 `ffmpeg.exe` → 系統 PATH
 
 ## 功能
 **總目錄**

@@ -9,6 +9,7 @@
 import argparse
 import io
 import json
+import logging
 import mimetypes
 import os
 import re
@@ -30,13 +31,29 @@ FROZEN = getattr(sys, "frozen", False)
 # 打包成 exe 時：資料、設定放在 exe 旁邊；網頁檔案在 exe 內部
 BASE = Path(sys.executable).resolve().parent if FROZEN else Path(__file__).resolve().parent
 STATIC = Path(getattr(sys, "_MEIPASS", BASE)) / "static"
-DATA = BASE / "data"
+__version__ = "1.1.0"
+APP_ID = "video-library-viewer"
+
+
+def _pick_home():
+    """程式資料夾可寫入就放在旁邊（可攜）；否則（例如放在 Program Files）改用使用者資料夾"""
+    from envcheck import writable
+    if writable(BASE / "data"):
+        return BASE, False
+    alt = Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "VideoLibraryViewer"
+    alt.mkdir(parents=True, exist_ok=True)
+    return alt, True
+
+
+HOME, HOME_FALLBACK = _pick_home()
+DATA = HOME / "data"
 CACHE = DATA / "cache"
 THUMBS = CACHE / "thumbs"
 SPRITES = CACHE / "sprites"
 PROXIES = CACHE / "proxies"
 DB_PATH = DATA / "library.db"
-CONFIG_PATH = BASE / "config.json"
+CONFIG_PATH = HOME / "config.json"
+FFMPEG_HOME = HOME / "ffmpeg"
 for d in (DATA, THUMBS, SPRITES, PROXIES):
     d.mkdir(parents=True, exist_ok=True)
 
@@ -556,7 +573,8 @@ def ff(name):
     exe = CONFIG.get(name) or name
     if os.path.isfile(exe):
         return exe
-    for p in (BASE / "ffmpeg" / "bin" / f"{name}.exe", BASE / "ffmpeg" / f"{name}.exe", BASE / f"{name}.exe"):
+    for p in (FFMPEG_HOME / "bin" / f"{name}.exe", BASE / "ffmpeg" / "bin" / f"{name}.exe",
+              BASE / "ffmpeg" / f"{name}.exe", BASE / f"{name}.exe"):
         if p.is_file():
             return str(p)
     return shutil.which(exe) or exe
@@ -1058,7 +1076,64 @@ def status():
     for k in ("ffmpeg", "ffprobe"):
         p = ff(k)
         ok[k] = os.path.isfile(p) or bool(shutil.which(p))
-    return {"tools": ok, "probing": bool(_probe_thread and _probe_thread.is_alive())}
+    return {"app": APP_ID, "version": __version__, "tools": ok,
+            "probing": bool(_probe_thread and _probe_thread.is_alive())}
+
+
+# ---- 環境檢查 / ffmpeg 自動安裝
+
+import envcheck  # noqa: E402
+
+RUN_PORT = [8765]
+
+
+def _after_ffmpeg_installed():
+    with _db_lock, db() as c:
+        c.execute("UPDATE media SET probed_at=NULL WHERE duration IS NULL")
+    start_probe_all()
+
+
+FFMPEG_INSTALLER = envcheck.FfmpegInstaller(FFMPEG_HOME, on_done=_after_ffmpeg_installed)
+
+
+def env_context():
+    with db() as c:
+        rows = c.execute("SELECT full_path FROM media").fetchall()
+    total = len(rows)
+    avail = sum(1 for r in rows if resolve_path(r["full_path"]))
+    return {"home": HOME, "base": BASE, "ff": ff, "port": RUN_PORT[0], "home_fallback": HOME_FALLBACK,
+            "media_total": total, "media_available": avail,
+            "max_path_len": max([len(resolve_path(r["full_path"]) or r["full_path"]) for r in rows] or [0])}
+
+
+@app.get("/api/env")
+def api_env():
+    items = envcheck.check_all(env_context())
+    return {"version": __version__, "frozen": bool(FROZEN), "overall": envcheck.summarize(items), "items": items,
+            "ffmpeg_install": FFMPEG_INSTALLER.status(),
+            "sources": [s["name"] for s in envcheck.FFMPEG_SOURCES], "ffmpeg_home": str(FFMPEG_HOME)}
+
+
+@app.post("/api/env/ffmpeg")
+def api_install_ffmpeg():
+    if not envcheck.writable(FFMPEG_HOME):
+        raise HTTPException(400, f"無法寫入 {FFMPEG_HOME}")
+    return FFMPEG_INSTALLER.start()
+
+
+@app.get("/api/env/ffmpeg")
+def api_ffmpeg_status():
+    return FFMPEG_INSTALLER.status()
+
+
+@app.post("/api/env/shortcut")
+def api_shortcut():
+    if not FROZEN:
+        raise HTTPException(400, "從原始碼執行時不需要建立捷徑")
+    try:
+        return {"ok": True, "path": envcheck.create_shortcut(sys.executable, BASE)}
+    except Exception as e:
+        raise HTTPException(500, f"建立捷徑失敗：{e}")
 
 
 # ---- 媒體檔案
@@ -1243,27 +1318,113 @@ def export(ids: str = "", picked: int = 0):
 app.mount("/", StaticFiles(directory=STATIC, html=True), name="static")
 
 
+def is_our_server(port):
+    import urllib.request
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/status", timeout=3) as r:
+            return json.loads(r.read()).get("app") == APP_ID
+    except Exception:
+        return False
+
+
+def pause_exit():
+    if FROZEN:
+        try:
+            input("按 Enter 結束…")
+        except EOFError:
+            pass
+
+
+def print_report():
+    icon = {"ok": "[OK]  ", "warn": "[注意]", "error": "[缺少]", "info": "[資訊]"}
+    print("=" * 60)
+    print(f" 影像圖書館 {__version__}  環境檢查")
+    print("=" * 60)
+    items = envcheck.check_all(env_context())
+    for i in items:
+        print(f" {icon[i['status']]} {i['label']}：{i['detail']}")
+    if any(i["key"] == "ffmpeg" and i["status"] == "error" for i in items):
+        print("\n 提示：缺少 ffmpeg。請在網頁右上角「環境檢查」按「自動下載安裝」，")
+        print("       或執行：VideoLibraryViewer.exe --install-ffmpeg")
+    print("=" * 60)
+
+
+def cli_install_ffmpeg():
+    print("下載安裝 ffmpeg 到：", FFMPEG_HOME)
+    FFMPEG_INSTALLER.start()
+    last = ""
+    while True:
+        st = FFMPEG_INSTALLER.status()
+        if st["state"] in ("done", "error"):
+            break
+        line = f"  {st.get('source', '')[:24]} {st.get('phase', '')} "
+        if st.get("total"):
+            line += f"{st['downloaded'] / 1048576:.0f} / {st['total'] / 1048576:.0f} MB ({st['progress'] * 100:.0f}%)"
+        if line != last:
+            print("\r" + line.ljust(78), end="", flush=True)
+            last = line
+        time.sleep(0.5)
+    print()
+    if st["state"] == "done":
+        print(f"完成：ffmpeg {st['version']} 已安裝到 {st['path']}")
+        return 0
+    print("失敗：", st.get("msg"))
+    for e in st.get("errors", []):
+        print("  -", e)
+    return 1
+
+
+class _QuietDisconnects(logging.Filter):
+    """瀏覽器中斷連線時 Windows 會印出 ConnectionResetError，無害但會嚇到使用者"""
+
+    def filter(self, record):
+        exc = record.exc_info[1] if record.exc_info else None
+        if isinstance(exc, (ConnectionResetError, ConnectionAbortedError, BrokenPipeError)):
+            return False
+        msg = record.getMessage()
+        return "WinError 10054" not in msg and "_call_connection_lost" not in msg
+
+
 def main():
     if FROZEN and sys.stdout is None:  # 無主控台模式時避免 uvicorn 記錄失敗
         sys.stdout = sys.stderr = open(os.devnull, "w")
+    logging.getLogger("asyncio").addFilter(_QuietDisconnects())
     ap = argparse.ArgumentParser(description="影像圖書館 後端")
     ap.add_argument("--host", default="127.0.0.1", help="要讓區網其他電腦使用請設為 0.0.0.0")
     ap.add_argument("--port", type=int, default=8765)
     ap.add_argument("--import", dest="imports", nargs="*", default=[], help="啟動時匯入的 Excel 清冊")
     ap.add_argument("--open", action="store_true", help="啟動後自動開啟瀏覽器")
     ap.add_argument("--no-browser", action="store_true", help="不要自動開啟瀏覽器（exe 預設會開啟）")
+    ap.add_argument("--install-ffmpeg", action="store_true", help="下載安裝 ffmpeg 後結束")
+    ap.add_argument("--check", action="store_true", help="只執行環境檢查")
     a = ap.parse_args()
+    if a.install_ffmpeg:
+        code = cli_install_ffmpeg()
+        pause_exit()
+        sys.exit(code)
+    if a.check:
+        init_db()
+        print_report()
+        pause_exit()
+        return
     if FROZEN and not a.no_browser:
         a.open = True
-    url = f"http://127.0.0.1:{a.port}/"
-    import socket
-    with socket.socket() as sk:  # 已在執行中：直接開啟瀏覽器即可
-        if sk.connect_ex(("127.0.0.1", a.port)) == 0:
-            print("影像圖書館已在執行中：", url)
+    import webbrowser
+    if not envcheck.port_free(a.port):
+        if is_our_server(a.port):  # 已在執行中：直接開啟瀏覽器即可
+            print("影像圖書館已在執行中：", f"http://127.0.0.1:{a.port}/")
             if not a.no_browser:
-                import webbrowser
-                webbrowser.open(url)
+                webbrowser.open(f"http://127.0.0.1:{a.port}/")
             return
+        old = a.port
+        a.port = next((p for p in range(old + 1, old + 50) if envcheck.port_free(p)), 0)
+        if not a.port:
+            print(f"連接埠 {old} 起都被占用，無法啟動。")
+            pause_exit()
+            return
+        print(f"連接埠 {old} 已被其他程式使用，改用 {a.port}")
+    RUN_PORT[0] = a.port
+    url = f"http://127.0.0.1:{a.port}/"
     init_db()
     for f in a.imports:
         p = os.path.abspath(f)
@@ -1274,9 +1435,9 @@ def main():
         import webbrowser
         threading.Timer(1.2, lambda: webbrowser.open(f"http://127.0.0.1:{a.port}/")).start()
     import uvicorn
-    print(f"影像圖書館已啟動：{url}")
-    print(f"資料位置：{DATA}")
-    print("關閉此視窗即可結束程式。")
+    print_report()
+    print(f"\n影像圖書館 {__version__} 已啟動：{url}")
+    print("關閉此視窗即可結束程式。\n")
     uvicorn.run(app, host=a.host, port=a.port, log_level="warning")
 
 
