@@ -52,7 +52,7 @@ Excel 若正在開啟可能暫時無法更新；請關閉 Excel 後重試。
 
 ## 安全與移除
 
-此安裝包與主程式「未數位簽章」，Windows SmartScreen 可能警告。
+此安裝包與主程式「未數位簽章」，Windows SmartScreen 可能警告；已開啟「智慧型應用程式控制」的電腦會擋下未簽章的程式，需使用有數位簽章的版本。
 請核對來源與 SHA256 後自行決定是否執行；不要關閉防毒防護。
 輕量包不含模型、FFmpeg、Node.js、Ollama、API Key 或使用者媒體。
 不影響既有 Media Catalog A+ Stable / Codex Skill 安裝。

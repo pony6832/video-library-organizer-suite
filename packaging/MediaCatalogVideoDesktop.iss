@@ -38,6 +38,12 @@ CloseApplications=no
 RestartApplications=no
 SetupLogging=yes
 InfoBeforeFile=README-zh-TW.md
+#ifdef SignInstaller
+; build-desktop.ps1 defines the "vlosign" command (packaging/codesign.py)
+; when a code signing certificate is configured.
+SignTool=vlosign
+SignedUninstaller=yes
+#endif
 
 [Tasks]
 Name: "desktopicon"; Description: "Create desktop shortcut"; Flags: checkedonce; Check: not IsQAMode
