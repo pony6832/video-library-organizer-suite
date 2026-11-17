@@ -58,5 +58,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $setup = (Get-ChildItem dist\release\VideoLibraryOrganizer-*-Setup.exe).FullName
-          gh release create $env:GITHUB_REF_NAME --draft --prerelease --title $env:GITHUB_REF_NAME --generate-notes `
+          # v0.3.0-beta.8 is a pre-release; v0.3.0 (no suffix) is a final release.
+          $stage = if ($env:GITHUB_REF_NAME -match '-') { '--prerelease' } else { '--latest' }
+          gh release create $env:GITHUB_REF_NAME --draft $stage --title $env:GITHUB_REF_NAME --generate-notes `
             $setup dist\release\viewer\VideoLibraryViewer.exe dist\release\tester-notes-zh-TW.txt dist\release\SHA256.json
