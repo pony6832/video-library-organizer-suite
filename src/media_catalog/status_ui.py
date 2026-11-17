@@ -662,9 +662,9 @@ class StatusApplication:
                 and self.workspace is not None
                 and self.workspace.database_path.is_file()
             ):
-                video_count, image_count, total_bytes = CatalogDatabase(
-                    self.workspace.database_path
-                ).media_summary()
+                video_count, image_count, total_bytes = (
+                    self._catalog_database().media_summary()
+                )
             return StatusViewModel.without_run(
                 status_text=status_text,
                 root_text=root_text,
@@ -679,9 +679,7 @@ class StatusApplication:
         if run.current_media_id:
             if self.workspace is None or self.supervisor.store is None:
                 raise RuntimeError("Analysis run has no workspace state")
-            record = CatalogDatabase(self.workspace.database_path).get_record(
-                run.current_media_id
-            )
+            record = self._catalog_database().get_record(run.current_media_id)
             media_name = record.path.name if record is not None else run.current_media_id
             segment_number, segment_total = self.supervisor.store.segment_progress(
                 run.current_media_id, run.current_segment_id
@@ -696,6 +694,21 @@ class StatusApplication:
             segment_total=segment_total,
             gemini_used=gemini_used,
         )
+
+    def _catalog_database(self) -> CatalogDatabase:
+        """One handle per workspace for the once-a-second status refresh.
+
+        Constructing ``CatalogDatabase`` re-runs the schema checks, which is a
+        write transaction; doing that every poll competed with the worker.
+        """
+        if self.workspace is None:
+            raise RuntimeError("No workspace selected")
+        path = self.workspace.database_path
+        cached = getattr(self, "_catalog_database_cache", None)
+        if cached is None or cached[0] != path:
+            cached = (path, CatalogDatabase(path))
+            self._catalog_database_cache = cached
+        return cached[1]
 
     def _render(self, model: StatusViewModel) -> None:
         self.status_pill.set_tone(theme.status_tone(model.status_text, model.light_color))

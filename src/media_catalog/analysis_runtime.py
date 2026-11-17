@@ -13,6 +13,7 @@ from .inference import (
     FfmpegImagePreparer,
     LocalAnalyzer,
     McpVideoExtractor,
+    OllamaHttpClient,
     Runner,
     WatchVideoExtractor,
 )
@@ -93,6 +94,7 @@ def build_local_analyzer(
     python_executable: str = sys.executable,
     ffmpeg_executable: str = "ffmpeg",
     ffprobe_executable: str = "ffprobe",
+    ollama_http: OllamaHttpClient | None = None,
 ) -> AnalysisRuntime:
     skill_root = Path(skill_root).resolve()
     model_check = _preflight(runner, [ollama_executable, "list"])
@@ -154,6 +156,10 @@ def build_local_analyzer(
         ffmpeg_executable=ffmpeg_executable,
         runner=runner,
     )
+    if ollama_http is None and runner is subprocess.run:
+        # The real runtime talks to the Ollama server; an injected runner
+        # (tests, benchmarks) keeps every model call on that runner.
+        ollama_http = OllamaHttpClient()
     local_analyzer = LocalAnalyzer(
         model=model,
         video_extractor=evidence_extractor,
@@ -161,6 +167,7 @@ def build_local_analyzer(
         ollama_executable=ollama_executable,
         runner=runner,
         timeout=600,
+        http_client=ollama_http,
     )
     run_state = RunStateStore(
         workspace.database_path, excel_path=workspace.excel_path

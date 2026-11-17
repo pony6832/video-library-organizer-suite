@@ -211,6 +211,13 @@ class SegmentPipeline:
                 error=f"frame_selection:{type(error).__name__}",
             )
             return
+        # Only the selected frames are read again later (Gemini enhancement);
+        # the other candidates used to pile up for every analysed segment.
+        kept = {Path(path).resolve() for path in selected}
+        for candidate in extraction.value:
+            resolved = Path(candidate).resolve()
+            if resolved not in kept and resolved.parent == output_dir:
+                resolved.unlink(missing_ok=True)
 
         local = self.stage_runner.run(
             "local_analysis",

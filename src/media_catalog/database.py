@@ -267,6 +267,17 @@ class CatalogDatabase:
             ).fetchone()
         return self._to_record(row) if row is not None else None
 
+    def source_stat(self, record_id: str) -> tuple[int | None, int | None]:
+        """(size, mtime_ns) the scan stored for this record; None when unknown."""
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT source_size, source_mtime_ns FROM media_records WHERE id = ?",
+                (record_id,),
+            ).fetchone()
+        if row is None:
+            return None, None
+        return row["source_size"], row["source_mtime_ns"]
+
     def list_records(self, *, include_missing: bool = False) -> list[MediaRecord]:
         with self._connect() as connection:
             rows = connection.execute(
