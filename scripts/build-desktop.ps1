@@ -23,6 +23,9 @@ $release = Join-Path $projectRoot "dist\$BuildId"
 New-Item -ItemType Directory -Path $work, $release | Out-Null
 Push-Location $projectRoot
 try {
+    # The shipped documents must name the version in pyproject.toml.
+    & $python packaging/release_docs.py check
+    if ($LASTEXITCODE -ne 0) { throw 'Documents name another version; run: python packaging/release_docs.py sync' }
     & $python -m PyInstaller --noconfirm --workpath $work --distpath $release packaging/desktop.spec
     if ($LASTEXITCODE -ne 0) { throw 'PyInstaller failed' }
     $bundle = Join-Path $release 'MediaCatalogVideoDesktop'
@@ -58,6 +61,14 @@ try {
     # Report anything left unsigned; VLO_SIGN_REQUIRED=1 turns it into a failure.
     & $python packaging/codesign.py verify $bundle $viewerDir (Join-Path $release 'VideoLibraryOrganizer-Setup.exe')
     if ($LASTEXITCODE -ne 0) { throw 'Unsigned executable files remain' }
+    # Testers get a file named after the version plus a note carrying its
+    # SHA-256, both generated here so they cannot drift from the build.
+    $versionTag = (& $python packaging/release_docs.py tag).Trim()
+    if ($LASTEXITCODE -ne 0 -or -not $versionTag) { throw 'Cannot derive the release tag' }
+    $versionedSetup = Join-Path $release "VideoLibraryOrganizer-$versionTag-Setup.exe"
+    Copy-Item -LiteralPath (Join-Path $release 'VideoLibraryOrganizer-Setup.exe') -Destination $versionedSetup
+    & $python packaging/release_docs.py notes $versionedSetup (Join-Path $release 'tester-notes-zh-TW.txt')
+    if ($LASTEXITCODE -ne 0) { throw 'Cannot write the tester notes' }
     $files = @(Get-ChildItem -LiteralPath $release -Recurse -File)
     $receipt = @($files | ForEach-Object {
         [ordered]@{ path = $_.FullName.Substring($release.Length + 1); bytes = $_.Length; sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash }

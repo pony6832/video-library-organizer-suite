@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Protocol
 
 from .analysis_mode import AnalysisMode
+from .app_logging import open_worker_log
 from .database import CatalogDatabase
 from .process_utils import HIDDEN_PROCESS_CREATION_FLAGS, terminate_process_tree
 from .run_state import AnalysisRun, RunStateStore
@@ -48,13 +49,23 @@ class SupervisorSnapshot:
 
 
 def _spawn_process(arguments: list[str]) -> WorkerProcess:
-    return subprocess.Popen(
-        arguments,
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        creationflags=HIDDEN_PROCESS_CREATION_FLAGS,
+    # The worker's output (progress lines and any traceback) goes to
+    # worker.log; without it a crashed analysis left nothing to inspect.
+    log = open_worker_log(
+        f"{datetime.now().isoformat(timespec='seconds')} analysis worker"
     )
+    try:
+        return subprocess.Popen(
+            arguments,
+            stdin=subprocess.DEVNULL,
+            stdout=log if log is not None else subprocess.DEVNULL,
+            stderr=subprocess.STDOUT if log is not None else subprocess.DEVNULL,
+            creationflags=HIDDEN_PROCESS_CREATION_FLAGS,
+        )
+    finally:
+        # The child inherited its own handle; ours is no longer needed.
+        if log is not None:
+            log.close()
 
 
 class _FileBackedProcess:

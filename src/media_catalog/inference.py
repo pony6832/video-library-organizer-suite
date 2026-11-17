@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -10,7 +12,11 @@ from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Protocol, Sequence
+import urllib.error
 from urllib.parse import urlparse
+import urllib.request
+
+from PIL import Image, ImageOps
 
 from .process_utils import (
     HIDDEN_PROCESS_CREATION_FLAGS,
@@ -25,11 +31,106 @@ Runner = Callable[..., subprocess.CompletedProcess[str]]
 MAX_PROMPT_CHARACTERS = 16_000
 MAX_OCR_CHARACTERS = 2_000
 VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".webm"}
+_PILLOW_PREVIEW_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp"}
 SEMANTIC_VERSION = re.compile(r"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
 
 
 class AnalysisError(RuntimeError):
     pass
+
+
+class OllamaUnavailable(RuntimeError):
+    """The local Ollama server could not be reached over HTTP."""
+
+
+class OllamaHttpClient:
+    """Talk to the running Ollama server instead of starting ``ollama run``.
+
+    Every segment used to launch a new CLI process, and the prompt had to fit
+    on the command line. The server keeps the model loaded between requests.
+    """
+
+    def __init__(
+        self,
+        *,
+        base_url: str | None = None,
+        keep_alive: str = "10m",
+        opener: Callable[..., object] | None = None,
+    ) -> None:
+        self.base_url = (base_url or _ollama_base_url(os.environ)).rstrip("/")
+        self.keep_alive = keep_alive
+        # The server is local: never route the request through a system proxy.
+        self._open = opener or urllib.request.build_opener(
+            urllib.request.ProxyHandler({})
+        ).open
+
+    def generate(
+        self,
+        model: str,
+        prompt: str,
+        images: Sequence[Path],
+        *,
+        timeout: float,
+        disable_thinking: bool,
+    ) -> str:
+        payload: dict[str, object] = {
+            "model": model,
+            "prompt": prompt,
+            "format": "json",
+            "stream": False,
+            "keep_alive": self.keep_alive,
+        }
+        if images:
+            payload["images"] = [
+                base64.b64encode(Path(path).read_bytes()).decode("ascii")
+                for path in images
+            ]
+        if disable_thinking:
+            payload["think"] = False
+        request = urllib.request.Request(
+            f"{self.base_url}/api/generate",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with self._open(request, timeout=timeout) as response:
+                body = response.read()
+        except urllib.error.HTTPError as error:
+            detail = error.read().decode("utf-8", errors="replace").strip()[-500:]
+            raise AnalysisError(
+                f"Ollama failed with HTTP {error.code}: {detail}"
+            ) from error
+        except TimeoutError as error:
+            raise AnalysisError(f"Ollama analysis failed: {error}") from error
+        except urllib.error.URLError as error:
+            if isinstance(error.reason, TimeoutError):
+                raise AnalysisError(f"Ollama analysis failed: {error.reason}") from error
+            raise OllamaUnavailable(str(error.reason)) from error
+        except OSError as error:
+            raise OllamaUnavailable(str(error)) from error
+        try:
+            decoded = json.loads(body)
+        except json.JSONDecodeError as error:
+            raise AnalysisError("Ollama did not return valid JSON") from error
+        text = decoded.get("response") if isinstance(decoded, dict) else None
+        if not isinstance(text, str):
+            raise AnalysisError("Ollama did not return valid JSON")
+        return text
+
+
+def _ollama_base_url(environment: dict[str, str] | os._Environ[str]) -> str:
+    host = (environment.get("OLLAMA_HOST") or "").strip()
+    if not host:
+        return "http://127.0.0.1:11434"
+    if "://" not in host:
+        host = "http://" + host
+    parsed = urlparse(host)
+    # 0.0.0.0 is a listen address, not one a client can connect to.
+    name = "127.0.0.1" if parsed.hostname in (None, "", "0.0.0.0") else parsed.hostname
+    if ":" in name:
+        name = f"[{name}]"
+    return f"{parsed.scheme}://{name}:{parsed.port or 11434}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -383,6 +484,8 @@ class FfmpegImagePreparer:
         preview = self.output_root / f"{key}.jpg"
         if preview.is_file() and preview.stat().st_size > 0:
             return preview
+        if self._prepare_in_process(media_path, preview):
+            return preview
 
         arguments = [
             self.ffmpeg_executable,
@@ -406,6 +509,32 @@ class FfmpegImagePreparer:
             raise AnalysisError("ffmpeg preview produced no image")
         return preview
 
+    @staticmethod
+    def _prepare_in_process(media_path: Path, preview: Path) -> bool:
+        """Shrink common image formats with Pillow instead of starting ffmpeg.
+
+        Extracted video frames are already JPEGs, so a second ffmpeg process
+        per frame only added start-up time. Anything Pillow cannot read
+        (HEIC, damaged files) still goes through ffmpeg.
+        """
+        if media_path.suffix.casefold() not in _PILLOW_PREVIEW_SUFFIXES:
+            return False
+        try:
+            with Image.open(media_path) as original:
+                image = ImageOps.exif_transpose(original).convert("RGB")
+            image.thumbnail((1024, 1024), Image.Resampling.LANCZOS)
+            image.save(preview, format="JPEG", quality=90)
+        except (OSError, ValueError, Image.DecompressionBombError):
+            preview.unlink(missing_ok=True)
+            return False
+        return preview.stat().st_size > 0
+
+    def discard(self, preview: Path) -> None:
+        """Remove a preview this preparer created; never anything else."""
+        candidate = Path(preview)
+        if candidate.parent == self.output_root and candidate.suffix == ".jpg":
+            candidate.unlink(missing_ok=True)
+
 
 def _representative_paths(paths: list[Path], limit: int = 3) -> list[Path]:
     if len(paths) <= limit:
@@ -424,7 +553,9 @@ class LocalAnalyzer:
         ollama_executable: str = "ollama",
         runner: Runner = run_process_tree,
         timeout: float = 300,
+        http_client: OllamaHttpClient | None = None,
     ) -> None:
+        self.http_client = http_client
         self.model = model
         self.video_extractor = video_extractor
         self.image_preparer = image_preparer
@@ -517,16 +648,40 @@ class LocalAnalyzer:
         )
         if ocr_text:
             prompt += " 已擷取 OCR 文字：" + ocr_text[:MAX_OCR_CHARACTERS]
-        return self._invoke(prepared_paths, prompt)
+        try:
+            return self._invoke(prepared_paths, prompt)
+        finally:
+            # Previews are cheap to rebuild; left behind they grew without
+            # bound (one per analysed frame).
+            discard = getattr(self.image_preparer, "discard", None)
+            if discard is not None:
+                for prepared in prepared_paths:
+                    discard(prepared)
 
     def _invoke(
         self, visual_paths: Sequence[Path], prompt: str
     ) -> Analysis:
+        disable_thinking = self.model.casefold().split(':')[0] == 'qwen3.5'
+        if self.http_client is not None:
+            try:
+                return self._parse_analysis(
+                    self.http_client.generate(
+                        self.model,
+                        prompt,
+                        visual_paths,
+                        timeout=self.timeout,
+                        disable_thinking=disable_thinking,
+                    )
+                )
+            except OllamaUnavailable:
+                # Server not reachable on its HTTP port: the CLI below can
+                # still start it (and reports a clear error when it cannot).
+                pass
         arguments = [
             self.ollama_executable,
             "run",
             self.model,
-            *(['--think=false'] if self.model.casefold().split(':')[0] == 'qwen3.5' else []),
+            *(['--think=false'] if disable_thinking else []),
             "--format",
             "json",
             "--hidethinking",

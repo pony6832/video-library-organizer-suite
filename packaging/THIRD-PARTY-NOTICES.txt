@@ -1,4 +1,4 @@
-Media Catalog Video Desktop 0.1.0 - third-party notices
+Video Library Organizer - third-party notices
 
 The distribution includes Python (PSF License), Tcl/Tk (Tcl/Tk BSD-style
 license), Pillow (MIT-CMU and its bundled codec notices), openpyxl (MIT), and

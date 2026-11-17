@@ -258,14 +258,12 @@ class DesktopApplication(StatusApplication):
         if snapshot.run and snapshot.run.stop_requested and snapshot.worker_alive:
             model = replace(model, status_text='安全停止中，正在保存目前進度…')
         if snapshot.run is None and snapshot.status == 'cataloging' and self.workspace and self.workspace.database_path.is_file():
-            from .database import CatalogDatabase
-            videos, _, total_bytes = CatalogDatabase(self.workspace.database_path).media_summary(video_only=True)
+            videos, _, total_bytes = self._catalog_database().media_summary(video_only=True)
             model = StatusViewModel.without_run(status_text=model.status_text, root_text=model.root_text,
                 video_count=videos, total_bytes=total_bytes)
             model = replace(model, progress_text=f'清冊已寫入 {videos} 部影片；正在掃描其餘檔案')
         if snapshot.run is None and snapshot.status == 'catalog_ready' and self.workspace:
-            from .database import CatalogDatabase
-            videos, _, total_bytes = CatalogDatabase(self.workspace.database_path).media_summary(video_only=True)
+            videos, _, total_bytes = self._catalog_database().media_summary(video_only=True)
             model = StatusViewModel.without_run(status_text=model.status_text, root_text=model.root_text,
                 video_count=videos, total_bytes=total_bytes)
             model = replace(model, progress_text=f'清冊已收錄 {videos} 部影片；尚未開始本次分析',
@@ -333,8 +331,19 @@ class DesktopApplication(StatusApplication):
         self.install_button.pack(side='right')
         self.check_button = self._button(buttons, '檢查環境', lambda: self._setup_job(False))
         self.check_button.pack(side='right', padx=(0, 8))
+        # Bug reports need the logs; one click beats describing a hidden folder.
+        self._button(buttons, '開啟記錄資料夾', self._open_logs, variant='quiet').pack(side='left')
         window.protocol('WM_DELETE_WINDOW', lambda: None if self.setup_busy else window.destroy())
         self._apply_control_state()
+
+    def _open_logs(self):
+        from .app_logging import log_directory
+        try:
+            directory = log_directory()
+            directory.mkdir(parents=True, exist_ok=True)
+            os.startfile(str(directory))
+        except OSError as error:
+            self.messagebox.showerror('無法開啟記錄資料夾', str(error))
 
     def _setup_job(self, install):
         if self.setup_busy or self.supervisor.is_busy:
@@ -382,6 +391,10 @@ class DesktopApplication(StatusApplication):
 
 def main(argv=None):
     args = list(sys.argv[1:] if argv is None else argv)
+    from .single_instance import RUNNING_MUTEX, WINDOW_MUTEX, hold
+    # Every process holds this marker so the installer can ask the user to
+    # close the program instead of failing on files that are in use.
+    hold(RUNNING_MUTEX)
     if args and args[0] in ('--worker', '--catalog'):
         if sys.platform == 'win32' and getattr(sys, 'frozen', False):
             import ctypes
@@ -409,13 +422,27 @@ def main(argv=None):
         elif sys.stdout:
             print(encoded)
         return 0 if report['ready'] else 1
+    from .app_logging import configure_app_logging
     from .status_ui import _create_tk_root, _show_startup_error
+    logger = configure_app_logging()
     root = _create_tk_root()
+    if not hold(WINDOW_MUTEX):
+        _show_startup_error(root, '影片資料庫整理已在執行',
+                            '這個程式已經開著了；請切換到已開啟的視窗（可能在工作列上）。')
+        return 0
+    logger.info('Desktop window started')
+
+    def log_callback_error(error_type, error, traceback):
+        # Tk swallows errors raised in callbacks; keep them for bug reports.
+        logger.error('Unhandled error in a window callback', exc_info=(error_type, error, traceback))
+
+    root.report_callback_exception = log_callback_error
     try:
         DesktopApplication(root, media_root=arguments.root)
         root.mainloop()
         return 0
     except (OSError, RuntimeError, ValueError) as error:
+        logger.error('Desktop window could not start', exc_info=True)
         _show_startup_error(root, '影片資料庫整理無法啟動', f'{error}\n請重新開啟程式並檢查資料夾權限。')
         return 2
 

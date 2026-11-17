@@ -15,8 +15,9 @@ from .processor import Analyzer
 from .source_guard import (
     SourceIntegrityError,
     capture_source,
+    check_snapshot_matches_record,
     sanitize_error,
-    verify_record_source,
+    verify_source_unchanged,
 )
 from .segment_pipeline import SafeStopRequested
 from .stage_runner import HeartbeatThread
@@ -316,8 +317,13 @@ def analyze_pending(
                 if run is not None and run.stop_requested:
                     break
             try:
-                snapshot = capture_source(record.path)
-                verify_record_source(record, snapshot)
+                # Unchanged size and mtime since the scan: trust the stored
+                # fingerprint instead of reading the whole file again.
+                size, mtime_ns = database.source_stat(record.id)
+                snapshot = capture_source(
+                    record.path, known=(size, mtime_ns, record.fingerprint)
+                )
+                check_snapshot_matches_record(record, snapshot)
             except (OSError, SourceIntegrityError) as error:
                 database.set_status(
                     record.id,
@@ -360,7 +366,7 @@ def analyze_pending(
                     warning = forced.warning
                 else:
                     result = analyzer.analyze(record.path)
-                verify_record_source(record, snapshot)
+                verify_source_unchanged(record, snapshot)
             except SafeStopRequested:
                 database.set_status(record.id, Status.PENDING)
                 update_run(record.id)

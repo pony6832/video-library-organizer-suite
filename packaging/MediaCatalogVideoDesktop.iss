@@ -34,7 +34,12 @@ UninstallDisplayIcon={app}\MediaCatalogVideoDesktop.exe
 CreateUninstallRegKey=not IsQAMode
 UsePreviousAppDir=not IsQAMode
 UsePreviousLanguage=no
-CloseApplications=no
+; Every process of the program holds this mutex (media_catalog.single_instance),
+; so Setup asks the user to close a running copy before it replaces files.
+AppMutex=VideoLibraryOrganizer-Running-02E5D05F-9218-4CC5-B41E-66A759599ADD
+; Versions before 0.3.0 Beta 7 have no mutex: let Restart Manager find the
+; processes that keep the old files open and offer to close them.
+CloseApplications=yes
 RestartApplications=no
 SetupLogging=yes
 InfoBeforeFile=README-zh-TW.md

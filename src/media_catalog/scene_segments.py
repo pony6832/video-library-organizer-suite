@@ -190,21 +190,27 @@ class SceneSegmenter:
                 "ffprobe returned an invalid duration"
             ) from error
 
+        scene_arguments = [
+            "-i",
+            str(media_path),
+            "-vf",
+            f"scale={SCENE_DETECTION_WIDTH}:-2,"
+            f"select=gt(scene\\,{SCENE_THRESHOLD}),showinfo",
+            "-an",
+            "-f",
+            "null",
+            "NUL" if os.name == "nt" else "/dev/null",
+        ]
+        # Scene detection decodes the whole video; let the GPU do it when it
+        # can. ffmpeg falls back to software by itself for unsupported codecs,
+        # and a driver that fails outright gets one plain software retry.
         scene_probe = self._run(
-            [
-                self.ffmpeg_executable,
-                "-hide_banner",
-                "-i",
-                str(media_path),
-                "-vf",
-                f"scale={SCENE_DETECTION_WIDTH}:-2,"
-                f"select=gt(scene\\,{SCENE_THRESHOLD}),showinfo",
-                "-an",
-                "-f",
-                "null",
-                "NUL" if os.name == "nt" else "/dev/null",
-            ]
+            [self.ffmpeg_executable, "-hide_banner", "-hwaccel", "auto", *scene_arguments]
         )
+        if scene_probe.returncode != 0:
+            scene_probe = self._run(
+                [self.ffmpeg_executable, "-hide_banner", *scene_arguments]
+            )
         if scene_probe.returncode != 0:
             raise SceneSegmentationError(
                 f"ffmpeg scene probe failed with exit code "

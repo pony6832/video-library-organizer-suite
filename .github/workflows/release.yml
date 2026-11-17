@@ -1,0 +1,62 @@
+name: Release installer
+
+# Pushing a version tag builds the installer on a clean machine and attaches it
+# to a DRAFT pre-release, so nothing is public until someone reviews it.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install
+        shell: pwsh
+        run: |
+          python -m venv .venv
+          .\.venv\Scripts\python -m pip install -e ".[test]" pyinstaller
+      - name: Test
+        # Live Gemini tests need a real key and are excluded.
+        run: .\.venv\Scripts\python -m pytest -q --ignore=tests/integration
+      - name: Tag matches pyproject.toml
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        run: |
+          $expected = 'v' + (.\.venv\Scripts\python packaging/release_docs.py tag).Trim()
+          if ($env:GITHUB_REF_NAME -ne $expected) { throw "Tag $env:GITHUB_REF_NAME does not match version $expected" }
+      - name: Inno Setup compiler
+        shell: pwsh
+        run: |
+          # scripts/build-desktop.ps1 expects the compiler under .tools\build\inno.
+          $inno = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6'
+          if (-not (Test-Path (Join-Path $inno 'ISCC.exe'))) { choco install innosetup --no-progress -y }
+          New-Item -ItemType Directory -Force .tools\build | Out-Null
+          Copy-Item -Recurse $inno .tools\build\inno
+      - name: Build
+        shell: pwsh
+        run: .\scripts\build-desktop.ps1 -BuildId release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installer
+          path: |
+            dist/release/VideoLibraryOrganizer-*-Setup.exe
+            dist/release/viewer/VideoLibraryViewer.exe
+            dist/release/tester-notes-zh-TW.txt
+            dist/release/SHA256.json
+      - name: Draft release
+        if: github.ref_type == 'tag'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $setup = (Get-ChildItem dist\release\VideoLibraryOrganizer-*-Setup.exe).FullName
+          gh release create $env:GITHUB_REF_NAME --draft --prerelease --title $env:GITHUB_REF_NAME --generate-notes `
+            $setup dist\release\viewer\VideoLibraryViewer.exe dist\release\tester-notes-zh-TW.txt dist\release\SHA256.json
