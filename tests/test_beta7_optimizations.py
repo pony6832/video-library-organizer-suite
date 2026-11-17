@@ -287,3 +287,16 @@ def test_tester_notes_carry_the_installer_hash(tmp_path):
     assert "0.3.0 Beta 7" in notes and setup.name in notes
     assert hashlib.sha256(b"installer").hexdigest().upper() in notes
     assert "{{" not in notes
+
+
+# --- signing helper under CI ----------------------------------------------
+
+def test_powershell_child_does_not_inherit_a_pwsh7_module_path():
+    import codesign
+
+    env = codesign._powershell_environment(
+        {"PSModulePath": r"C:\Program Files\PowerShell\7\Modules", "Path": "x", "SystemRoot": "C:"}
+    )
+
+    assert "PSModulePath" not in env and env["Path"] == "x"
+    assert "psmodulepath" not in {key.lower() for key in codesign._powershell_environment({"psmodulepath": "y"})}

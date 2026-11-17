@@ -78,6 +78,27 @@ def _is_pe(path: Path) -> bool:
         return handle.read(2) == b"MZ"
 
 
+def _windows_powershell() -> str:
+    """Windows PowerShell 5.1 by full path, so a PATH entry for pwsh 7 cannot win."""
+    root = os.environ.get("SystemRoot")
+    if root:
+        candidate = Path(root) / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe"
+        if candidate.is_file():
+            return str(candidate)
+    return "powershell"
+
+
+def _powershell_environment(env=os.environ) -> dict[str, str]:
+    """Environment without a PSModulePath inherited from PowerShell 7.
+
+    CI runs this script from pwsh 7, whose PSModulePath points at the 7.x
+    module folders. Windows PowerShell 5.1 inherits it and then cannot load
+    Microsoft.PowerShell.Security (Get-AuthenticodeSignature); without the
+    variable it builds its own default path.
+    """
+    return {key: value for key, value in env.items() if key.upper() != "PSMODULEPATH"}
+
+
 def _powershell(script: str, payload: dict) -> list[dict]:
     """Run a Windows PowerShell snippet that reads a JSON payload and prints JSON."""
     with tempfile.TemporaryDirectory() as tmp:
@@ -91,8 +112,9 @@ def _powershell(script: str, payload: dict) -> list[dict]:
             encoding="utf-8-sig",
         )
         result = subprocess.run(
-            ["powershell", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(program)],
+            [_windows_powershell(), "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", str(program)],
             capture_output=True, text=True, encoding="utf-8", errors="replace", creationflags=_NO_WINDOW,
+            env=_powershell_environment(),
         )
     if result.returncode != 0:
         raise RuntimeError(f"PowerShell signing step failed: {result.stderr.strip()[-800:]}")
