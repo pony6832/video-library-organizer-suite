@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Callable, Sequence
 
 from . import ui_theme as theme
+from ._version import display_version
 from .analysis_mode import AnalysisMode
 from .database import CatalogDatabase
 from .excel_catalog import ReviewedPathsError, read_reviewed_paths_strict
@@ -265,7 +266,7 @@ class StatusApplication:
         )
         self.closing = False
 
-        root.title(self.WINDOW_TITLE)
+        root.title(f"{self.WINDOW_TITLE} {display_version()}")
         theme.apply_window_icon(root)
         root.configure(bg=theme.BG)
         root.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -340,8 +341,13 @@ class StatusApplication:
         tk.Frame(self.root, bg=theme.BORDER, height=1).pack(fill="x")
         titles = tk.Frame(header, bg=theme.SURFACE)
         titles.pack(side="left")
-        tk.Label(titles, text=self.APP_TITLE, bg=theme.SURFACE, fg=theme.TEXT,
-                 font=theme.font(17, "bold"), anchor="w").pack(anchor="w")
+        name_row = tk.Frame(titles, bg=theme.SURFACE)
+        name_row.pack(anchor="w")
+        tk.Label(name_row, text=self.APP_TITLE, bg=theme.SURFACE, fg=theme.TEXT,
+                 font=theme.font(17, "bold"), anchor="w").pack(side="left")
+        # Testers report the version they see here, so it stays in plain view.
+        tk.Label(name_row, text=display_version(), bg=theme.SURFACE, fg=theme.TEXT_MUTED,
+                 font=theme.font(10), anchor="sw").pack(side="left", padx=(10, 0), pady=(6, 0))
         if not self.compact:
             tk.Label(titles, text=self.APP_SUBTITLE, bg=theme.SURFACE, fg=theme.TEXT_MUTED,
                      font=theme.font(9), anchor="w").pack(anchor="w", pady=(2, 0))

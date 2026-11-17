@@ -300,3 +300,14 @@ def test_powershell_child_does_not_inherit_a_pwsh7_module_path():
 
     assert "PSModulePath" not in env and env["Path"] == "x"
     assert "psmodulepath" not in {key.lower() for key in codesign._powershell_environment({"psmodulepath": "y"})}
+
+
+# --- version shown in the window -------------------------------------------
+
+def test_version_shown_in_the_window_matches_the_project():
+    from media_catalog import __version__
+    from media_catalog._version import display_version
+
+    assert __version__ == release_docs.project_version()
+    assert display_version(__version__) == release_docs.version_label(__version__)
+    assert display_version("0.3.0b8") == "0.3.0 Beta 8" and display_version("0.3.0") == "0.3.0"

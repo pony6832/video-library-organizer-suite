@@ -1,4 +1,4 @@
-# Video Library Organizer（影片資料庫整理）— Windows 桌面版 0.3.0 Beta 8
+# Video Library Organizer（影片資料庫整理）— Windows 桌面版 0.3.0
 
 > 測試版：介面全面改版並強化穩定性，請試用後回報問題與建議。
 > 前身為「Media Catalog Video Desktop」0.2.0；安裝時會直接升級舊版並改用新名稱的捷徑（清冊、模型、工具與 Key 都會保留）。
@@ -21,7 +21,7 @@
 
 ## 安裝與使用
 
-1. 執行 VideoLibraryOrganizer-0.3.0-beta.8-Setup.exe，安裝到目前使用者帳號。
+1. 執行 VideoLibraryOrganizer-0.3.0-Setup.exe，安裝到目前使用者帳號。
 2. 從桌面或開始功能表「Video Library Organizer」啟動。
 3. 先按右上角「環境設定」，再按「檢查環境」；檢查本身不會下載或分析。
 4. 缺少元件時，經你按下安裝才會下載 FFmpeg、Node.js、Ollama、

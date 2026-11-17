@@ -53,6 +53,9 @@ def _rules(version: str) -> dict[Path, list[tuple[str, str]]]:
             (rf"(Windows 桌面版 ){_LABEL}", rf"\g<1>{label}"),
             (rf"VideoLibraryOrganizer-{_TAG}-Setup\.exe", f"VideoLibraryOrganizer-{tag}-Setup.exe"),
         ],
+        PROJECT / "src" / "media_catalog" / "_version.py": [
+            (r'(VERSION = ")[^"]+(")', rf"\g<1>{version}\g<2>"),
+        ],
         PROJECT / "README.md": [
             (rf"(目前版本：\*\*){_LABEL}(\*\*)", rf"\g<1>{label}\g<2>"),
         ],

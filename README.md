@@ -28,7 +28,7 @@
 
 到 [Releases](https://github.com/pony6832/video-library-organizer-suite/releases) 下載 `VideoLibraryOrganizer-<版本>-Setup.exe`，雙擊安裝，不需要 Python 或 Codex。只要影像圖書館的同事，下載同一個 Release 裡的 `VideoLibraryViewer.exe` 即可。
 
-- 目前版本：**0.3.0 Beta 8**（預覽版，供測試回饋）；內含影像圖書館 1.4.1
+- 目前版本：**0.3.0**（預覽版，供測試回饋）；內含影像圖書館 1.4.1
 - 安裝包已內含影像圖書館（VideoLibraryViewer），不必另外下載。
 - 安裝在目前使用者帳號，不需系統管理員權限；目前版本**未數位簽章**：SmartScreen 出現時按「其他資訊」→「仍要執行」；開啟「智慧型應用程式控制」的電腦會直接擋下，需等有簽章的版本。建置流程已支援簽章，取得憑證後的做法見 [程式碼簽章說明](docs/code-signing.md)。
 - 安裝包不含模型、使用者媒體或 API Key。第一次使用請按右上角「環境設定」→「檢查環境」，
